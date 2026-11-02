@@ -166,7 +166,7 @@ async function rec() {
   const nbHost = h("div", { class: "nbhost" });
   const back = h("button", { class: "ib", "aria-label": "Indietro", onclick: () => go("#/") }, "‹");
   const head = h("div", { class: "rechead" }, back, status, lag);
-  const body = h("div", { class: "split" }, nbHost, handle, panel);
+  const body = h("div", { class: "split" + (cfg.get("txpanel", "0") === "1" ? "" : " nopanel") }, nbHost, handle, panel);
   app.append(body);
   const savedW = +cfg.get("txw", "360"); panel.style.setProperty("--w", savedW + "px");
   handle.addEventListener("pointerdown", e => { e.preventDefault(); const portrait = innerHeight > innerWidth; const r = body.getBoundingClientRect(); const mv = ev => { const v = portrait ? clamp(r.bottom - ev.clientY, 120, r.height - 200) : clamp(r.right - ev.clientX, 220, r.width - 300); panel.style.setProperty("--w", v + "px"); cfg.set("txw", v); }; const up = () => { removeEventListener("pointermove", mv); removeEventListener("pointerup", up); }; addEventListener("pointermove", mv); addEventListener("pointerup", up); });
@@ -174,6 +174,7 @@ async function rec() {
   const page = newPage(note.title, { noteId: id }); note.pageId = page.id;
   const nb = createNotebook(nbHost, page, { header: head, onChange: p => putPage(p) });
   head.after(btn); const pauseB = h("button", { disabled: true }, "Pausa"); btn.after(pauseB);
+  const panB = h("button", { class: "ib small", title: "Mostra anche il pannello laterale della trascrizione", "aria-label": "Pannello trascrizione", onclick: () => { const on = body.classList.toggle("nopanel"); cfg.set("txpanel", on ? "0" : "1"); } }, "▤"); pauseB.after(panB);
   let finished = false;
   cleanup = async () => { if (finishFn) await finishFn(); nb.destroy(); app.classList.remove("full"); };
   let finishFn = null;
@@ -184,17 +185,17 @@ async function rec() {
   tv.meta(`Modello pronto · ${Engine.device === "webgpu" ? "GPU" : "CPU (più lento)"} · ${(MODELS[model] || [model])[0].split(" — ")[0]}`);
   let stream; try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true } }); } catch (e) { tv.meta("Microfono negato: consentilo nelle impostazioni di Safari. Puoi comunque prendere appunti.", "bad"); status.textContent = "Solo appunti"; delete page.noteId; await putPage(page); return; }
   await putNote(note); await putPage(page);
-  let received = 0, doneTo = 0, pending = 0, chain = Promise.resolve(), paused = false, wake = null, stopped = false, ai = 0;
+  let lastEnd = -1, received = 0, doneTo = 0, pending = 0, chain = Promise.resolve(), paused = false, wake = null, stopped = false, ai = 0;
   const ctx = new (window.AudioContext || window.webkitAudioContext)(); await ctx.resume();
   const src = ctx.createMediaStreamSource(stream), proc = ctx.createScriptProcessor(4096, 1, 1), mute = ctx.createGain(); mute.gain.value = 0;
-  const seg = new Segmenter((start, audio) => { pending++; const dur = audio.length / 16000; chain = chain.then(async () => { try { const r = await Engine.run(audio, lang); if (r.text) { const s = { start, dur, text: r.text }; note.segments.push(s); tv.add(s); await putNote(note); } doneTo = start + dur; } catch (e) { tv.meta("Errore su una frase: " + e.message, "bad"); } pending--; }); });
+  const seg = new Segmenter((start, audio) => { pending++; const dur = audio.length / 16000; chain = chain.then(async () => { try { const r = await Engine.run(audio, lang); if (r.text) { const s = { start, dur, text: r.text }; const para = lastEnd < 0 || start - lastEnd > 4; nb.addTranscript(s, para ? `¶ ${lastEnd < 0 ? "Inizio" : "Nuovo paragrafo"} · ${fmt(start)}` : null); lastEnd = start + dur; note.segments.push(s); tv.add(s); await putNote(note); } doneTo = start + dur; } catch (e) { tv.meta("Errore su una frase: " + e.message, "bad"); } pending--; }); });
   proc.onaudioprocess = e => { if (paused || stopped) return; const d = e.inputBuffer.getChannelData(0); received += d.length / ctx.sampleRate; seg.feed(downsample(new Float32Array(d), ctx.sampleRate)); };
   src.connect(proc); proc.connect(mute); mute.connect(ctx.destination);
   let mr; try { mr = new MediaRecorder(stream); mr.ondataavailable = e => { if (e.data.size) putAudio(id, ai++, e.data); }; mr.start(5000); note.mime = mr.mimeType; } catch { tv.meta("Il salvataggio dell'audio non è supportato su questo browser: avrai solo il testo.", "bad"); }
   try { wake = await navigator.wakeLock?.request("screen"); } catch {}
   const tick = setInterval(() => { const l = Math.max(0, received - doneTo); status.textContent = `${paused ? "❚❚" : "●"} ${fmt(received)}`; status.classList.toggle("paused", paused); lag.textContent = pending ? ` · ritardo ~${Math.round(l)} s` + (l > 45 ? " (modello lento: scegline uno più piccolo)" : "") : ""; }, 500);
   btn.disabled = false; btn.textContent = "■ Stop"; pauseB.disabled = false;
-  pauseB.onclick = () => { paused = !paused; if (mr) try { paused ? mr.pause() : mr.resume(); } catch {} pauseB.textContent = paused ? "Riprendi" : "Pausa"; tv.meta(paused ? `❚❚ In pausa · ${fmt(received)}` : `▶ Ripresa · ${fmt(received)}`); };
+  pauseB.onclick = () => { paused = !paused; if (mr) try { paused ? mr.pause() : mr.resume(); } catch {} pauseB.textContent = paused ? "Riprendi" : "Pausa"; { const m = paused ? `❚❚ In pausa · ${fmt(received)}` : `▶ Ripresa · ${fmt(received)}`; tv.meta(m); nb.addTranscriptMeta(m); } };
   finishFn = async () => { if (stopped) return; stopped = true; clearInterval(tick); btn.disabled = true; btn.textContent = "Salvo…"; seg.flush(); try { mr && mr.state !== "inactive" && mr.stop(); } catch {} stream.getTracks().forEach(t => t.stop()); proc.disconnect(); ctx.close(); wake && wake.release().catch(() => {}); await chain; await new Promise(r => setTimeout(r, 400)); note.status = "done"; note.duration = received; await putNote(note); await putPage(nb.page); window.onbeforeunload = null; };
   btn.onclick = async () => { await finishFn(); go("#/note/" + id); };
   window.onbeforeunload = () => stopped ? null : "Registrazione in corso";

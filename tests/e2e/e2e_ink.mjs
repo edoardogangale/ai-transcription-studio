@@ -46,19 +46,30 @@ await p.click(".ink-selmenu >> text=Fine");
 await p.click("[aria-label=Testo]"); const s2 = await box(); await p.mouse.click(s2.x + 650, s2.y + 820); await p.keyboard.type("Bastiglia 1789"); await p.click("[aria-label=Penna]"); pg = await cur(); ok("casella di testo", pg.texts.some(t => t.text === "Bastiglia 1789"), JSON.stringify(pg.texts));
 await p.click("[aria-label=Foglio]"); await p.click(".ink-pop >> text=Quadretti"); await p.click(".ink-pop >> text=Allarga →"); pg = await cur(); ok("carta a quadretti + foglio allargato", pg.paper.type === "grid" && pg.w > 820, `${pg.paper.type} ${pg.w}`);
 await p.click("[aria-label=Righello]"); await p.waitForTimeout(200); ok("righello visibile", await p.locator(".tool.on[aria-label=Righello]").count() === 1);
+await p.click("[aria-label=Matita]");
+await p.evaluate(() => { const st = document.querySelector(".ink-stage"), r = st.getBoundingClientRect(); const ev = (type, x, y, b, alt) => st.dispatchEvent(new PointerEvent(type, { pointerId: 5, pointerType: "pen", isPrimary: true, clientX: r.left + x, clientY: r.top + y, buttons: b, pressure: b ? 0.6 : 0, altitudeAngle: alt, bubbles: true, cancelable: true })); ev("pointermove", 900, 500, 0, 1.5); ev("pointerdown", 900, 500, 1, 0.35); for (let i = 1; i < 30; i++) ev("pointermove", 900 + i * 6, 500 + Math.sin(i / 3) * 30, 1, 0.35); ev("pointerup", 1080, 500, 0, 0.35); ev("pointermove", 700, 300, 0, 1.2); });
+pg = await cur(); const pen = pg.strokes.at(-1); ok("matita inclinata = ombreggiatura (tratto largo)", pen.t === "pencil" && pen.pts[2] >= 1, pen.pts.slice(0, 3).join(","));
 if (shots) await p.screenshot({ path: shots + "/ink_page.png" });
 await p.click("[aria-label=Righello]");
 await p.click("[aria-label=Indietro]"); await p.waitForSelector(".pagecard"); ok("pagina in «Appunti» con anteprima", await p.locator(".pagecard").count() === 1);
 // live diviso: appunti + trascrizione animata
-await p.click("text=Registra e prendi appunti"); await p.waitForSelector("text=■ Stop", { timeout: 15000 }); ok("live: quaderno + trascrizione affiancati", await p.locator(".split .ink-stage").count() === 1 && await p.locator(".txpanel").count() === 1);
+await p.click("text=Registra e prendi appunti"); await p.waitForSelector("text=■ Stop", { timeout: 15000 }); ok("live: quaderno a tutto schermo, pannello laterale nascosto", await p.locator(".split .ink-stage").count() === 1 && !(await p.locator(".txpanel").isVisible()));
 await draw([[150, 300], [300, 320]]);
-await p.waitForSelector(".tx .w", { timeout: 25000 }); ok("parole animate nella trascrizione", await p.locator(".tx .w").count() > 2);
-ok("orari/paragrafi in un altro colore (meta)", await p.locator(".tx .meta.para").count() >= 1 && await p.locator(".tx .meta").first().evaluate(e => getComputedStyle(e).color) !== await p.locator(".tx .spoken").first().evaluate(e => getComputedStyle(e).color));
+await p.waitForSelector(".ink-text.transcript .w", { timeout: 25000 }); ok("la trascrizione si scrive DENTRO il foglio, parole animate", await p.locator(".ink-text.transcript .w").count() > 2);
+ok("paragrafi/orari in un altro colore", await p.locator(".ink-text.transcript .meta").count() >= 1 && await p.locator(".ink-text.transcript .meta").first().evaluate(e => getComputedStyle(e).color) !== await p.locator(".ink-text.transcript .spoken").first().evaluate(e => getComputedStyle(e).color));
+const tb = await p.locator(".ink-text.transcript").boundingBox(); const sb = await box();
+await touch([["pointerdown", 11, tb.x - sb.x + 40, tb.y - sb.y + 50], ["pointerup", 11, tb.x - sb.x + 40, tb.y - sb.y + 50]]); await p.waitForTimeout(150);
+ok("tocco col dito sul testo → modificabile", await p.evaluate(() => document.activeElement?.classList.contains("transcript") && document.activeElement.isContentEditable));
+await p.keyboard.type(" NOTA MIA"); await p.waitForTimeout(900);
+{ const tt = (await cur()).texts.find(x => x.kind === "transcript"); ok("il testo trascritto si può modificare (salvato)", tt && tt.text.includes("NOTA MIA"), JSON.stringify(tt && tt.html).slice(0, 400) + " active=" + await p.evaluate(() => document.activeElement.className)); }
+await p.evaluate(() => document.activeElement.blur());
+const ss = await p.evaluate(() => { const d = document.querySelector(".ink-text.transcript"); const r = document.createRange(); r.selectNodeContents(d); getSelection().removeAllRanges(); getSelection().addRange(r); return getSelection().toString().length; }); ok("il testo è selezionabile", ss > 20);
+await p.click("[aria-label='Pannello trascrizione']"); ok("pannello laterale facoltativo", await p.locator(".txpanel").isVisible()); await p.click("[aria-label='Pannello trascrizione']");
 if (shots) { await p.waitForTimeout(1500); await p.screenshot({ path: shots + "/ink_live.png" }); }
 await p.click("text=Pausa"); await p.click("text=Riprendi"); await p.click("text=■ Stop"); await p.waitForSelector("text=Apri gli appunti", { timeout: 15000 }); ok("stop → dettaglio con «Apri gli appunti»", true);
-await p.click("text=Apri gli appunti"); await p.waitForSelector(".ink-stage"); pg = await cur(); ok("appunti della lezione salvati", pg.noteId && pg.strokes.length === 1);
+await p.click("text=Apri gli appunti"); await p.waitForSelector(".ink-stage"); pg = await cur(); ok("appunti della lezione salvati (tratti + trascrizione)", pg.noteId && pg.strokes.length === 1 && pg.texts.some(x => x.kind === "transcript"));
 await p.setViewportSize({ width: 1024, height: 1366 }); await p.goto("http://localhost:8792/#/rec"); await p.waitForSelector("text=■ Stop", { timeout: 15000 }); await p.waitForTimeout(500);
-const lay = await p.evaluate(() => { const a = document.querySelector(".nbhost").getBoundingClientRect(), b = document.querySelector(".txpanel").getBoundingClientRect(); return b.top >= a.bottom - 2; }); ok("verticale: trascrizione sotto gli appunti", lay);
+await p.click("[aria-label='Pannello trascrizione']"); await p.waitForTimeout(300); const lay = await p.evaluate(() => { const a = document.querySelector(".nbhost").getBoundingClientRect(), b = document.querySelector(".txpanel").getBoundingClientRect(); return b.top >= a.bottom - 2; }); ok("verticale: trascrizione sotto gli appunti", lay);
 if (shots) await p.screenshot({ path: shots + "/ink_portrait.png" });
 await p.click("text=■ Stop"); await p.waitForSelector("text=Apri gli appunti", { timeout: 15000 });
 ok("nessun errore JS / dialogo nativo", errs.length === 0, errs.join(" | "));

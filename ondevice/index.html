@@ -30,7 +30,7 @@ input[type=text]{font:inherit;min-height:44px;border-radius:10px;border:1px soli
 .pagecard{display:flex;flex-direction:column;align-items:flex-start;gap:4px;background:transparent;border:0;padding:0;margin:0;text-align:left;color:var(--fg)}
 .pagecard .thumb{width:100%;height:150px;margin:0;--gap:9px}
 main.full{max-width:none;position:fixed;inset:0;margin:0;padding:env(safe-area-inset-top) 0 0;display:flex;flex-direction:column;background:#f2f2f7;color:#1c1c1e}
-.split{flex:1;display:flex;min-height:0}.nbhost{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column}.nbhost>.ink{flex:1}
+.split{flex:1;display:flex;min-height:0}.split.nopanel .txpanel,.split.nopanel .split-h{display:none}.nbhost{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column}.nbhost>.ink{flex:1}
 .split-h{width:10px;cursor:col-resize;background:#e5e5ea;touch-action:none;position:relative}.split-h::after{content:"";position:absolute;left:3px;top:50%;width:4px;height:44px;margin-top:-22px;border-radius:2px;background:#aeaeb2}
 .txpanel{width:var(--w,360px);display:flex;flex-direction:column;background:#fff;min-height:0}
 .txhead{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid #e5e5ea}
@@ -48,8 +48,8 @@ main.full{max-width:none;position:fixed;inset:0;margin:0;padding:env(safe-area-i
 @media (prefers-reduced-motion:reduce){.tx .w,.tx .meta.in{animation:none;opacity:1}}
 .rechead{display:flex;align-items:center;gap:6px;min-width:0}
 .recstat{font-weight:600;color:#ff3b30;font-variant-numeric:tabular-nums;white-space:nowrap}.recstat.paused{color:#ff9f0a}
-.rechead + button,.rechead ~ button{min-height:38px;padding:4px 12px;margin:0 2px;border-radius:9px;font-size:15px;border:0;background:#e5e5ea;color:#1c1c1e}
-.ink-top button.primary{background:#ff3b30;color:#fff}
+.rechead ~ button:not(.ib){min-height:36px;padding:4px 14px;margin:0 3px;border-radius:18px;font-size:15px;font-weight:600;border:0;background:rgba(118,118,128,.14);color:#1c1c1e}
+.ink-top button.primary{background:#ff3b30!important;color:#fff!important}
 .ptitle{font:600 17px -apple-system,system-ui!important;background:transparent!important;border:0!important;color:#1c1c1e!important;min-width:120px;max-width:340px}
 .recmsg{padding:0 14px}.recmsg .bar{background:#e5e5ea}.recmsg .mut{color:#8e8e93}
 .ib.small{font-size:20px}

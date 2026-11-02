@@ -156,6 +156,7 @@ ROUTES.push([/^#\/live$/, async () => {
     const slow = rtf != null && rtf > 0.7;
     return h("div", null,
       h("h1", null, "Registra con trascrizione live"), h("p", { class: "sub" }, "Il testo compare mentre parli, l'audio viene salvato sul server man mano e puoi aggiungere note ed evidenziazioni in diretta."),
+      !sys.websocket && h("div", { class: "notice bad" }, "Il server non ha il supporto WebSocket (serve per il live): esegui  pip install \"uvicorn[standard]\"  oppure  pip install websockets  e riavvia."),
       !navigator.mediaDevices?.getUserMedia && h("div", { class: "notice bad" }, "Il microfono non è disponibile: il browser lo permette solo su HTTPS o localhost. Avvia con ./scripts/start.sh --lan --https."),
       !avail.length && h("div", { class: "notice warn" }, "Nessun modello installato e compatibile per questa lingua. ", h("a", { href: "#/models" }, "Installa un modello →")),
       h("div", { class: "grid g2" }, h("div", null, h("label", null, "Lingua"), langSel), h("div", null, h("label", null, "Modello"), modelSel),
@@ -165,7 +166,7 @@ ROUTES.push([/^#\/live$/, async () => {
         rtf == null ? "Velocità di questo modello su questo PC non ancora misurata: se il testo resta indietro rispetto alla voce, scegli un modello più veloce (Parakeet è il più rapido tra quelli misurati)."
           : slow ? `Attenzione: ${cur.name} ha velocità ${rtf.toFixed(2)}× il tempo reale su questo hardware: il testo resterà indietro e il ritardo crescerà. Puoi registrare lo stesso e ritrascrivere dopo con un altro modello.`
             : `${cur.name}: ${speedText(rtf)}${cur.measured_rtf != null ? " (misurato sul tuo PC)" : " (misura di riferimento, 4 core CPU)"}: adatto al live.`),
-      h("div", { class: "row", style: "margin-top:16px" }, h("button", { class: "primary rec-btn", disabled: !avail.length || !navigator.mediaDevices?.getUserMedia || !cfgs.model_id, onclick: async () => {
+      h("div", { class: "row", style: "margin-top:16px" }, h("button", { class: "primary rec-btn", disabled: !avail.length || !sys.websocket || !navigator.mediaDevices?.getUserMedia || !cfgs.model_id, onclick: async () => {
         try { await Recorder.start({ language: cfgs.language, model_id: cfgs.model_id, context: cfgs.context, title: title.value.trim() || null, folder_id: cfgs.folder_id }); }
         catch (e) { toast(e.message, 7000); } render(); } }, Recorder.state === "starting" ? "Avvio (carico il modello)…" : "● Inizia registrazione")),
       h("details", { style: "margin-top:20px" }, h("summary", null, "Registrazione in secondo piano: cosa aspettarsi"),

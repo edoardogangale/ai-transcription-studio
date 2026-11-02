@@ -46,7 +46,7 @@ ROUTES.push([/^#\/new$/, async () => {
 
   const ctxSel = h("select", { onchange: e => { CFG.context = e.target.value; saveCfg(); } }, sys.contexts.map(c => h("option", { value: c, selected: c === CFG.context }, c)));
   const folderSel = h("select", { onchange: e => { CFG.folder = e.target.value || null; applyFolderPrefs(); saveCfg(); } }, folderOptions().map(o => h("option", { value: o.id, selected: (o.id || null) === CFG.folder }, o.label)));
-  const mkCb = (key, label, extra = {}) => h("label", { class: "opt" }, h("input", Object.assign({ type: "checkbox", checked: !!CFG[key], onchange: e => { CFG[key] = e.target.checked; saveCfg(); upd(); } }, extra)), h("span", null, label));
+  const mkCb = (key, label, extra = {}) => h("label", { class: "opt" }, h("input", Object.assign({ type: "checkbox", checked: !!CFG[key], onchange: e => { CFG[key] = e.target.checked; saveCfg(); upd(); if (key === "diarize" || key === "teacher_only") drawDia(); } }, extra)), h("span", null, label));
   const diaOK = sys.diarization.available;
   const langBox = h("div", { class: "row" }), modelBox = h("div", { class: "grid g3" }), fastBox = h("div", { class: "grid g3" });
   const startBtn = h("button", { class: "primary", onclick: start }, "Avvia trascrizione"), hint = h("div", { class: "m" });

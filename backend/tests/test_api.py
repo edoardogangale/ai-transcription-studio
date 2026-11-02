@@ -37,7 +37,7 @@ def test_exactly_three_models_per_language(client):
         r = client.get("/api/models", params={"language": lang}).json()
         real = [m for m in r["models"] if not m["id"].startswith("mock")]
         assert len(real) == 3, lang
-        assert [m["id"] for m in r["fast"]] == ["whisper-small", "whisper-base"]
+        assert [m["id"] for m in r["fast"]] == ["whisper-base", "whisper-tiny"]
         assert {"name", "installed", "compatible", "license", "verification", "benchmark"} <= real[0].keys()
     it = [m["id"] for m in client.get("/api/models?language=it").json()["models"]]
     en = [m["id"] for m in client.get("/api/models?language=en").json()["models"]]

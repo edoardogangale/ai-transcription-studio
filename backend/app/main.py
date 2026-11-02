@@ -1,6 +1,7 @@
 """AI Transcription Studio - API FastAPI."""
 import asyncio
 import hashlib
+import importlib.util
 import io
 import json
 import mimetypes
@@ -69,6 +70,7 @@ def system():
     return {"hardware": hardware.info(), "ffmpeg": bool(shutil.which("ffmpeg") and shutil.which("ffprobe")),
             "llm_models": postprocess.llm_models(), "contexts": vocab.CONTEXTS,
             "diarization": {"available": ok_d, "reason": why_d},
+            "websocket": bool(importlib.util.find_spec("websockets") or importlib.util.find_spec("wsproto")),
             "settings": {"device": db.setting_get("device", "auto"), "parallel": engine.parallel_limit(),
                          "diar_threshold": db.setting_get("diar_threshold", 0.5), "mock": config.ENABLE_MOCK},
             "data_dir": str(config.DATA_DIR), "disk_free_gb": round(shutil.disk_usage(config.DATA_DIR).free / 1e9, 1)}

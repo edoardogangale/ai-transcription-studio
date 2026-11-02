@@ -307,3 +307,19 @@ def test_diarization_helpers():
 def test_settings_validation(client):
     assert client.put("/api/settings", json={"diar_threshold": 5}).status_code == 400
     assert client.put("/api/settings", json={"device": "tpu"}).status_code == 400
+
+
+def test_catalog_structure_and_real_sizes():
+    """3 modelli principali per lingua + 2 veloci; ogni modello ha origine verificabile e dimensione misurata."""
+    from app import registry as r
+    for lang in ("it", "en", "auto"):
+        assert len([m for m in r.BY_LANGUAGE[lang] if not m.startswith("mock")]) == 3
+    assert len(r.FAST) == 2 and not set(r.FAST) & set(r.BY_LANGUAGE["it"] + r.BY_LANGUAGE["en"])
+    for mid, m in r.ALL.items():
+        if mid.startswith("mock"):
+            continue
+        assert m["sources"] and all(s["url"].startswith("https://github.com/k2-fsa/sherpa-onnx/releases/download/") and s["bytes"] > 1e6 for s in m["sources"]), mid
+        assert m["download_bytes"] == sum(s["bytes"] for s in m["sources"]), mid
+        assert m["benchmark"] is None or (m["benchmark"]["url"].startswith("http") and m["benchmark"]["text"]), mid
+    assert all(m in r.REFERENCE or m == "parakeet-tdt-0.6b-v2" for m in r.MODELS if not m.startswith("mock"))
+    assert "parakeet-tdt-0.6b-v3" in r.BY_LANGUAGE["it"] and "parakeet-tdt-0.6b-v2" in r.BY_LANGUAGE["en"]

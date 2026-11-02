@@ -93,6 +93,7 @@ async function route() {
   if (cleanup) { try { await cleanup(); } catch {} cleanup = null; }
   const [view, arg] = (location.hash || "#/").slice(2).split("/");
   app.replaceChildren(); app.classList.remove("full");
+  document.querySelectorAll(".topbar nav a").forEach(a => a.classList.toggle("active", a.dataset.nav === ((view === "note" || view === "page") ? "" : view)));
   ({ "": home, rec, note: detail, test, import: importView, page: pageView }[view] || home)(arg);
 }
 addEventListener("hashchange", route);
@@ -134,7 +135,7 @@ async function home() {
   const ps = await allPages();
   pages.replaceChildren(...(ps.length ? ps.map(p => h("button", { class: "pagecard", onclick: () => go("#/page/" + p.id) }, h("div", { class: "thumb paperprev " + (p.paper?.type || "lines") }), h("b", null, p.title), h("span", { class: "mut" }, new Date(p.updated || p.created).toLocaleDateString("it-IT") + (p.noteId ? " · 🎙" : "")))) : [h("div", { class: "mut" }, "Nessuna pagina. Crea una pagina o registra una lezione: gli appunti si creano da soli.")]));
   const notes = await allNotes();
-  list.replaceChildren(...(notes.length ? notes.map(n => h("div", { class: "card", onclick: () => go("#/note/" + n.id), style: "cursor:pointer" }, h("b", null, n.title), h("div", { class: "mut" }, `${new Date(n.created).toLocaleString("it-IT")} · ${fmt(n.duration || 0)} · ${(MODELS[n.model] || [n.model])[0].split(" — ")[0]}${n.status !== "done" ? " · interrotta" : ""}`))) : [h("div", { class: "mut" }, "Ancora nulla. Premi «Registra e prendi appunti».")]));
+  list.replaceChildren(...(notes.length ? notes.map(n => h("div", { class: "card item", onclick: () => go("#/note/" + n.id), style: "cursor:pointer" }, h("b", null, n.title), h("div", { class: "mut" }, `${new Date(n.created).toLocaleString("it-IT")} · ${fmt(n.duration || 0)} · ${(MODELS[n.model] || [n.model])[0].split(" — ")[0]}${n.status !== "done" ? " · interrotta" : ""}`))) : [h("div", { class: "mut" }, "Ancora nulla. Premi «Registra e prendi appunti».")]));
 }
 
 // trascrizione: il testo detto è nero; ciò che aggiunge l'app (orari, paragrafi, avvisi) è viola e corsivo

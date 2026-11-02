@@ -28,9 +28,9 @@ CREATE TABLE IF NOT EXISTS corrections(id INTEGER PRIMARY KEY AUTOINCREMENT, own
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
 """
 
-JSON_COLS = {"options", "partial", "segments", "orig_segments", "stats", "prefs"}
+JSON_COLS = {"options", "partial", "segments", "orig_segments", "stats", "prefs", "notebook"}
 MIGRATIONS = [("transcripts", "folder_id", "TEXT"), ("transcripts", "kind", "TEXT DEFAULT 'file'"),
-              ("transcripts", "owner", "TEXT"), ("folders", "owner", "TEXT")]
+              ("transcripts", "owner", "TEXT"), ("folders", "owner", "TEXT"), ("transcripts", "notebook", "TEXT")]
 
 
 def conn() -> sqlite3.Connection:
@@ -124,6 +124,13 @@ def delete(tid: str) -> None:
 # ---- ricerca full-text (FTS5, insensibile ad accenti/maiuscole) ----
 def index_text(tid: str, title: str, body: str) -> None:
     c = conn()
+    r = c.execute("SELECT notebook FROM transcripts WHERE id=?", (tid,)).fetchone()   # anche il testo del quaderno si cerca
+    if r and r[0]:
+        try:
+            from . import notebook as _nb
+            body = (body or "") + "\n" + _nb.to_text(json.loads(r[0]).get("html", ""))
+        except Exception:
+            pass
     c.execute("DELETE FROM fts WHERE tid=?", (tid,))
     c.execute("INSERT INTO fts(tid,title,body) VALUES(?,?,?)", (tid, title or "", body or ""))
     c.commit()

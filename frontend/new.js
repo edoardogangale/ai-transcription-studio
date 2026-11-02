@@ -36,12 +36,21 @@ ROUTES.push([/^#\/new$/, async () => {
   drop.addEventListener("drop", e => e.dataTransfer.files.length && Uploads.add([...e.dataTransfer.files]));
 
   const queue = h("div", { class: "list", style: "margin-top:12px" });
-  const drawQueue = () => queue.replaceChildren(UP.items.map(u => h("div", { class: "item" }, h("span", null, u.state === "done" ? "✓" : u.state === "error" ? "⚠" : "♪"),
-    h("div", { class: "grow" }, h("div", { class: "t" }, u.name), u.state === "uploading" ? h("div", { class: "bar" }, h("i", { style: `width:${u.pct}%` })) : null,
-      h("div", { class: "m" + (u.state === "error" ? " err" : "") }, u.meta ? `Durata ${fmtT(u.meta.duration)} · ${fmtB(u.meta.size)} · ${u.meta.codec}` : fmtB(u.size)),
-      h("div", { class: "m" }, { queued: "In attesa di caricamento", uploading: `Caricamento ${Math.round(u.pct)}%`, ready: "Pronto: scegli un modello e premi Avvia", done: u.queued ? "In trascrizione ✓" : "Caricato", error: u.error }[u.state])),
-    (u.state === "done" && u.tid) ? h("a", { class: "btn small", href: "#/t/" + u.tid }, "Apri") : null,
-    u.state !== "done" ? h("button", { class: "small", onclick: () => Uploads.cancel(u.id) }, "✕") : null)));
+  let qStruct = "";
+  const stText = u => ({ queued: "In attesa di caricamento", uploading: `Caricamento ${Math.round(u.pct)}%`, ready: "Pronto: scegli un modello e premi Avvia", done: u.queued ? "In trascrizione ✓" : "Caricato", error: u.error }[u.state]);
+  const drawQueue = () => {
+    const struct = sigOf(UP.items.map(u => [u.id, u.state, !!u.meta, u.queued, u.error, u.tid]));
+    if (struct === qStruct) {   // stessa struttura: aggiorna solo barra e testo di stato
+      UP.items.forEach(u => { const el = queue.querySelector(`[data-uid="${u.id}"]`); if (!el) return; const i = el.querySelector(".bar i"); if (i) i.style.width = u.pct + "%"; const st = el.querySelector(".qstat"); if (st && st.textContent !== stText(u)) st.textContent = stText(u); });
+      return;
+    }
+    safeRedraw(() => { qStruct = struct; queue.replaceChildren(UP.items.map(u => h("div", { class: "item", "data-uid": u.id }, h("span", null, u.state === "done" ? "✓" : u.state === "error" ? "⚠" : "♪"),
+      h("div", { class: "grow" }, h("div", { class: "t" }, u.name), u.state === "uploading" ? h("div", { class: "bar" }, h("i", { style: `width:${u.pct}%` })) : null,
+        h("div", { class: "m" + (u.state === "error" ? " err" : "") }, u.meta ? `Durata ${fmtT(u.meta.duration)} · ${fmtB(u.meta.size)} · ${u.meta.codec}` : fmtB(u.size)),
+        h("div", { class: "m qstat" }, stText(u))),
+      (u.state === "done" && u.tid) ? h("a", { class: "btn small", href: "#/t/" + u.tid }, "Apri") : null,
+      u.state !== "done" ? h("button", { class: "small", onclick: () => Uploads.cancel(u.id) }, "✕") : null))); });
+  };
   UP.listeners.add(drawQueue); const unlisten = new MutationObserver((_, o) => { if (!queue.isConnected) { UP.listeners.delete(drawQueue); o.disconnect(); } }); unlisten.observe($app, { childList: true });
 
   const ctxSel = h("select", { onchange: e => { CFG.context = e.target.value; saveCfg(); } }, sys.contexts.map(c => h("option", { value: c, selected: c === CFG.context }, c)));

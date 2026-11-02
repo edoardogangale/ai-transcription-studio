@@ -8,7 +8,7 @@ ROUTES.push([/^#\/c\/(\w+)$/, async gid => {
   const audioEl = h("audio", { controls: true, style: "width:100%;position:sticky;top:64px;z-index:5;margin:14px 0" });
   async function load() {
     c = await api("/api/compare/" + gid); if (!audioEl.src) audioEl.src = withTok(`/api/transcripts/${c.items[0].id}/audio`);
-    draw(); if (c.items.every(i => ["done", "failed", "cancelled"].includes(i.status))) timers.forEach(clearInterval);
+    const sig = sigOf(c); if (sig !== load._sig) { load._sig = sig; safeRedraw(draw); } if (c.items.every(i => ["done", "failed", "cancelled"].includes(i.status))) timers.forEach(clearInterval);
   }
   function draw() {
     const name = id => mname(c.items.find(i => i.id === id).model_id);
@@ -56,10 +56,11 @@ ROUTES.push([/^#\/models$/, async () => {
   async function load() {
     const [r, sys] = await Promise.all([api("/api/models/all"), api("/api/system")]); admin = !!(sys.me && sys.me.admin);
     const by = t => r.models.filter(m => m.tier === t);
-    box.replaceChildren(h("div", { class: "notice" + (sys.persistence && !sys.persistence.ok ? " warn" : "") }, sys.persistence ? sys.persistence.text : ""), h("div", { class: "notice", style: "margin-top:8px" }, `Spazio occupato dai modelli: ${fmtB(r.total_disk_bytes)} · spazio libero: ${sys.disk_free_gb} GB`),
+    const sig = sigOf([r, sys.disk_free_gb, sys.persistence]); if (sig === load._sig) return; load._sig = sig;
+    safeRedraw(() => box.replaceChildren(h("div", { class: "notice" + (sys.persistence && !sys.persistence.ok ? " warn" : "") }, sys.persistence ? sys.persistence.text : ""), h("div", { class: "notice", style: "margin-top:8px" }, `Spazio occupato dai modelli: ${fmtB(r.total_disk_bytes)} · spazio libero: ${sys.disk_free_gb} GB`),
       h("h2", null, "Modelli principali (tre per lingua)"), h("div", { class: "grid g2" }, by("main").map(card)),
       h("h2", null, "Modelli veloci (meno accurati)"), h("div", { class: "grid g2" }, by("fast").map(card)),
-      h("h2", null, "Componenti"), h("div", { class: "grid g2" }, by("component").map(card)));
+      h("h2", null, "Componenti"), h("div", { class: "grid g2" }, by("component").map(card))));
   }
   await load(); poll(() => load().catch(() => {}), 2500);
 }]);

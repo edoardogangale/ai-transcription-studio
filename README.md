@@ -34,7 +34,7 @@ Quindi: **registra con Memo Vocali e carica il file dopo** (non col live per tut
 1. **Aspetta il reset mensile**: i dati restano; esporta prima i PDF che ti servono (non puoi aprire l'app finché è spento).
 2. **Paga a consumo**: in Settings → Billing imposti tu un limite di spesa (di base è 0 €, quindi si blocca e basta). Il costo orario è basso ma controlla i prezzi attuali su GitHub.
 3. **Usa un computer** (di casa, di un compagno, della scuola): è gratis e senza limiti. Basta `./scripts/start.sh --lan`; i modelli si scaricano la prima volta.
-4. **Server gratuito sempre acceso** (avanzato): per esempio l'offerta "Always Free" di Oracle Cloud (VM ARM) con Docker (`docker compose up -d`). Richiede carta di credito per l'iscrizione e un po' di configurazione; **non l'ho provato** (né la compatibilità ARM). Servizi come Hugging Face Spaces o Colab gratuiti li sconsiglio: il disco si cancella a ogni riavvio, quindi dovresti riscaricare i modelli (e gli audio passerebbero da server altrui).
+4. **Server sempre acceso** (avanzato): una VM con Docker (`docker compose up -d`). L'offerta gratuita di Oracle Cloud è **da verificare**: le fonti che ho trovato sono discordanti e diverse indicano che nel 2026 l'allocazione ARM gratuita sarebbe stata ridotta (≈2 core / 12 GB) ([Oracle Always Free 2026](https://space-node.net/blog/oracle-cloud-always-free-limits-2026), [InfoQ](https://infoq.com/news/2026/07/oracle-cloud-free-tier-limits/)). Non l'ho provata né la compatibilità ARM. Servizi come Hugging Face Spaces o Colab gratuiti li sconsiglio: il disco si cancella a ogni riavvio, quindi dovresti riscaricare i modelli (e gli audio passerebbero da server altrui).
 
 ### B) Hai un computer (Mac/Windows/Linux) → lo avvii lì
 Requisiti: **Python 3.11+** e **FFmpeg** (`brew install ffmpeg` · `winget install Gyan.FFmpeg` · `sudo apt install ffmpeg`).
@@ -51,6 +51,16 @@ Windows: `scripts\start.bat` oppure `scripts\start.bat lan`. Poi sull'iPad apri 
 
 ### I modelli si scaricano UNA volta sola
 Stanno **fuori dalla cartella del progetto**: `~/.ai-transcription-studio/models` (Codespaces: nella home del Codespace; Docker: volume). Aggiornare o riscaricare il progetto non li tocca; la pagina *Modelli AI* ti dice dove sono e ti avvisa se la posizione non è persistente. Ripetere il download serve solo se **elimini tu** il Codespace/volume o la cartella.
+
+### Avere l'app sull'iPad SENZA avviare ogni volta un Codespace (ricerca)
+Premessa: i modelli devono girare *da qualche parte*. Le strade realistiche, in ordine di praticità:
+| Strada | Com'è | Costo | Note onesti |
+|---|---|---|---|
+| **Un computer di casa sempre acceso + Tailscale** | L'icona sulla Home dell'iPad apre l'app **subito**, da casa e fuori, con HTTPS | gratis (corrente) | È la soluzione migliore se hai un Mac/PC/mini-PC da lasciare acceso. `./scripts/start.sh --lan` + `tailscale serve --bg 8000` ([Tailscale](https://tailscale.com)). Non provata qui. |
+| **VPS sempre acceso** | Come sopra, senza computer di casa | a pagamento (l'offerta gratuita di Oracle sembra ridotta: vedi sopra) | `docker compose up -d`. Non provato. |
+| **Codespaces con meno attrito** | Resta com'è, ma si riavvia in un tocco | gratis (quota) | Timeout di inattività più lungo (github.com/settings/codespaces) e un'automazione di **Comandi Rapidi** che chiama l'API di GitHub per avviare il Codespace (`POST /user/codespaces/{nome}/start`, serve un token con permesso Codespaces). **Non provato**; il token resta salvato sull'iPad: usa un token a scadenza e con il solo permesso necessario. |
+| **App interamente sull'iPad, senza server** | Nessun server | gratis | **Oggi non c'è un'opzione buona con le funzioni di questa app.** (1) *Nel browser* (Whisper in WebGPU/WASM, [transformers.js](https://github.com/huggingface/transformers.js/issues/1739)): su Safari/iPad i limiti di memoria per scheda sono stretti, ci sono perdite di memoria note e restano praticabili solo modelli tiny/base, che nelle mie misure sbagliano molto (WER 30–38% sull'italiano di prova); i modelli grandi (Turbo ~2,9 GB) possono non entrare. (2) *App nativa* con [WhisperKit](https://www.argmaxinc.com/blog/whisperkit) (MIT, gira sul Neural Engine): richiede Xcode su Mac per compilarla (nessuna fonte trovata su Swift Playgrounds e Apple ID gratuito) e non posso né compilarla né provarla da qui. Esistono app gratuite di terze parti per trascrivere sull'iPad (non verificate), ma senza cartelle, profili, live, quaderno e correzione AI di questa. |
+**Consiglio**: se hai un computer che può restare acceso, usa quello con Tailscale (apertura istantanea, nessun limite di ore). Se no, tieni Codespaces con le abitudini descritte sopra e, se vuoi, l'automazione dei Comandi Rapidi.
 
 ## Per i tuoi compagni (profili con archivi separati)
 Quando l'app è protetta (`--lan`, Codespaces, Docker) il codice che vedi all'avvio è **amministratore**. In **Impostazioni → Persone** crei un profilo per ogni compagno: ricevono un **codice personale** (mostrato una sola volta) e un indirizzo da aprire sul loro iPad.
@@ -73,6 +83,7 @@ Quando l'app è protetta (`--lan`, Codespaces, Docker) il codice che vedi all'av
 | **Lavoro in background** | Trascrizione e salvataggio dell'audio live avvengono sul server: continuano anche chiudendo la pagina. Centro attività (come i download) con caricamenti, trascrizioni, download dei modelli, registrazione; notifiche di sistema di avanzamento/fine. Vedi "Background: cosa è garantito". |
 | **Ascolto con testo evidenziato** | Vista *Ascolto*: parola corrente evidenziata e sottolineata, parole già dette colorate, il resto attenuato, scorrimento automatico, clic su una parola per ripartire da lì. Con timestamp per parola (Parakeet) è preciso; con Whisper è una **stima** proporzionale (lo dichiara). Vista *Modifica* per correggere. |
 | **Chi parla** | Riconoscimento dei parlanti locale (pyannote segmentation 3.0 + WeSpeaker). L'insegnante = chi parla di più (modificabile). Le altre voci sono nascoste ed escluse da copia/PDF (si possono mostrare), oppure **non trascritte affatto** ("solo l'insegnante": più veloce). |
+| **Quaderno** | Per ogni trascrizione un documento libero come Word / Note di Apple: correggi e cancella con la tastiera, formatti (grassetto, titoli, elenchi, evidenziatore) e **disegni o scrivi con l'Apple Pencil** (penna, evidenziatore, frecce, gomma, annulla). Vedi "Quaderno". |
 | **Più persone** | Profili con codice personale e archivio **privato** (anche l'amministratore non vede quello degli altri); modelli e calcolo condivisi. Vedi "Per i tuoi compagni". |
 | **Correzione AI** | Facoltativa: LLM locale gratuito (Qwen3 via Ollama) che *propone* correzioni e segnala parti fuori tema; approvi tu, con diff e controlli di sicurezza; ricorda le correzioni per materia. Vedi "Correzione con AI". |
 
@@ -153,6 +164,15 @@ Avanzamento: solo conteggi reali ("segmento 3 di 12"), nessuna percentuale o tem
 - **A Fedele**: testo del modello con le tue correzioni. **B Pulita**: regole deterministiche (toglie solo intercalari tipo "ehm" e raddoppi di parole funzione; paragrafi dalle pause; nessun LLM). **C Appunti**: richiede un LLM locale via [Ollama](https://ollama.com); senza, è dichiarata indisponibile; l'output è marcato come rielaborazione AI.
 - **Vocabolario**: con questo runtime nessun modello accetta un prompt/glossario, quindi i termini (contesti Matematica, Fisica, … più i tuoi) generano solo **suggerimenti di correzione** nell'editor (parole molto simili a un termine): li applichi tu con un clic, **mai sostituzioni automatiche**.
 
+## Quaderno (testo libero + Apple Pencil)
+Dall'editor tocca **📓 Quaderno**: l'app crea un documento di testo dalla trascrizione (paragrafi con il testo fedele, **▶ per riascoltare** ogni punto, le tue evidenziazioni e note).
+- **Testo**: scrivi, cancella e correggi con la tastiera; grassetto/corsivo/sottolineato, titoli, elenchi, evidenziatore, annulla/ripeti; "＋ Disegno" inserisce uno spazio vuoto per schemi. Salvataggio automatico. Con l'Apple Pencil, **Scribble** di iPadOS (scrivere a mano nei campi di testo) dovrebbe funzionare nel quaderno, ma dipende da iPadOS e non l'ho potuto provare.
+- **Disegno**: penna (spessore in base alla pressione), evidenziatore, freccia, gomma (cancella il tratto toccato), 5 colori, 3 spessori. Di norma disegna **solo la penna** e un dito **scorre la pagina** (così il palmo appoggiato non lascia segni); si può attivare "Disegna anche col dito".
+- **I disegni seguono il testo**: ogni tratto è legato al paragrafo vicino; se aggiungi o cancelli testo sopra, il disegno si sposta con il suo paragrafo (verificato). Sono tratti vettoriali, non immagini.
+- **PDF**: *Esporta → PDF con disegni (Stampa)* → su iPad *Condividi → Salva su File* (o pizzica l'anteprima per ottenere il PDF). I disegni diventano SVG vettoriali dentro il loro paragrafo (verificato: il PDF contiene i tracciati). **Word (.docx)** e **.txt** esportano solo il testo, senza disegni.
+- **Quaderno e trascrizione sono indipendenti**: modificare il quaderno non cambia segmenti, timestamp e audio sincronizzati. "Ricrea dalla trascrizione" ricomincia da zero (con conferma). La ricerca nell'archivio trova anche il testo del quaderno. Privato per profilo come il resto.
+- **Limiti**: l'inchiostro per quaderno è limitato a ~8 MB; il canvas copre solo la parte visibile (così funziona con documenti lunghissimi). **Collaudato con eventi di tipo `pen` simulati e mouse in Chromium** (tratto, pressione, freccia, evidenziatore, gomma, annulla, ancoraggio, salvataggio, stampa); **non con un vero Apple Pencil su Safari**: pressione, inclinazione e il rifiuto del palmo vanno provati sul tuo iPad.
+
 ## Correzione con AI (facoltativa, gratuita, open source)
 Serve **solo se** la trascrizione non è già abbastanza buona: l'app valuta caso per caso se conviene ("consigliata", "facoltativa", "probabilmente non serve") in base al modello usato (dalle misure sopra) e ai punti dubbi trovati. Con Whisper Turbo/Large di solito **non serve**; con Parakeet è facoltativa (nomi e termini tecnici); con i modelli veloci è consigliata.
 - **Come funziona**: un piccolo LLM locale via [Ollama](https://ollama.com) (nessun dato esce dal computer). Modello consigliato: **Qwen3 4B** (licenza Apache-2.0, ~2,6 GB, anche su CPU); **Qwen3 8B** (~5,2 GB, 16 GB di RAM) capisce meglio il contesto; i modelli si scaricano **una volta sola** dall'app (Impostazioni → Correzione con AI) e restano in Ollama. Su Linux/Codespaces: `bash scripts/install_ollama.sh`; su Mac/Windows installa l'app da ollama.com.
@@ -165,15 +185,17 @@ Serve **solo se** la trascrizione non è già abbastanza buona: l'app valuta cas
 ## Test
 
 ```bash
-./scripts/test.sh            # 60 test backend (~25 s); --slow aggiunge il file sintetico da 190 minuti
+./scripts/test.sh            # 67 test backend (~25 s); --slow aggiunge il file sintetico da 190 minuti
 STUDIO_REAL=1 STUDIO_DATA=/percorso/data STUDIO_TEST_EN=en.wav STUDIO_TEST_WAV=... STUDIO_TEST_TRUTH=... \
   pytest backend/tests/real_models     # test con MODELLI VERI (genera l'audio con real_models/make_speech.py)
 node tests/e2e/e2e_mock.mjs ...        # browser, tutti i flussi (server con STUDIO_ENABLE_MOCK=1)
 node tests/e2e/e2e_real.mjs ...        # browser con modelli veri (server normale)
 node tests/e2e/e2e_users_ai.mjs ...    # profili, accesso, correzione AI (server con STUDIO_TOKEN + tests/e2e/fake_ollama.py)
 node tests/e2e/e2e_ipad.mjs ...        # iPad Pro emulato: touch, bersagli, orientamenti
+node tests/e2e/e2e_notebook.mjs ...    # quaderno: testo, inchiostro (pen simulato), ancoraggio, stampa PDF
+node tests/e2e/stable_live.mjs ...     # i pulsanti del live non vengono ridisegnati (i tocchi non si perdono)
 ```
-**Superati in sviluppo**: 60 test backend (inclusi profili isolati e correzione AI con finto Ollama) (pipeline, cartelle, ricerca, PDF unico, ZIP audio, parallelismo reale, live via WebSocket, recupero dopo crash, filtro insegnante…); 4 test con modelli veri (parlanti + solo insegnante, live, tutti i modelli in inglese); **57 controlli nel browser** con mock (cartelle, 3 file in parallelo con avvio automatico, copia multipla, PDF unico, condivisione, evidenziazione parola per parola, note, live con microfono finto, responsive iPad/smartphone) e **25 su profili/accesso/AI**, **34 su iPad Pro emulato** e **19 con modelli veri** (parola evidenziata coerente con i tempi del modello, salto alla parola, voci estranee escluse, live).
+**Superati in sviluppo**: 67 test backend (inclusi profili isolati e correzione AI con finto Ollama) (pipeline, cartelle, ricerca, PDF unico, ZIP audio, parallelismo reale, live via WebSocket, recupero dopo crash, filtro insegnante…); 4 test con modelli veri (parlanti + solo insegnante, live, tutti i modelli in inglese); **57 controlli nel browser** con mock (cartelle, 3 file in parallelo con avvio automatico, copia multipla, PDF unico, condivisione, evidenziazione parola per parola, note, live con microfono finto, responsive iPad/smartphone) e **25 su profili/accesso/AI**, **34 su iPad Pro emulato** e **19 con modelli veri** (parola evidenziata coerente con i tempi del modello, salto alla parola, voci estranee escluse, live).
 Il mock (`STUDIO_ENABLE_MOCK=1`) aggiunge due schede "MOCK" chiaramente etichettate; non esiste in uso normale.
 
 ## Cosa NON è stato verificato

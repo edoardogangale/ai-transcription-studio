@@ -67,7 +67,7 @@ async function folderMenu(f) {
   await modal("📁 " + f.name, body);
 }
 
-function selectFolder(id) { LIB.folder = id; LS.set("lib_folder", id); LIB.sel.clear(); LIB.hits = null; loadLib(); }
+function selectFolder(id) { LIB.folder = id; LS.set("lib_folder", id); LIB.sel.clear(); LIB.hits = null; loadLib(true); }
 
 function sidebar() {
   const top = LIB.folders.filter(f => !f.parent_id);
@@ -151,19 +151,21 @@ function searchContent() {
   searchT = setTimeout(async () => { try { LIB.hits = (await api("/api/search?q=" + encodeURIComponent(LIB.q))).results; document.getElementById("libhits")?.replaceChildren(hitsView()); } catch {} }, 250);
 }
 
-async function loadLib() {
+async function loadLib(force) {
   const f = await api("/api/folders"); LIB.folders = f.folders; LIB.unfiled = f.unfiled;
   if (LIB.folder !== "all" && LIB.folder !== "none" && !LIB.folders.some(x => x.id === LIB.folder)) LIB.folder = "all";
   const qs = LIB.folder === "none" ? "?unfiled=true" : LIB.folder !== "all" ? "?folder_id=" + LIB.folder : "";
   LIB.items = await api("/api/transcripts" + qs);
   const ids = new Set(LIB.items.map(t => t.id)); [...LIB.sel].forEach(i => ids.has(i) || LIB.sel.delete(i));
   CFG.folder = LIB.folder !== "all" && LIB.folder !== "none" ? LIB.folder : CFG.folder; saveCfg();
-  drawLib();
+  const sig = sigOf([LIB.folder, LIB.folders, LIB.unfiled, LIB.items]);
+  if (!force && sig === LIB._sig) return;                 // niente è cambiato: non si ridisegna (i pulsanti restano stabili)
+  LIB._sig = sig; safeRedraw(drawLib);
 }
 
 ROUTES.push([/^#?\/?$/, async () => {
-  libRoot = h("div", { class: "lib" }); $app.replaceChildren(libRoot);
-  await loadLib();
+  libRoot = h("div", { class: "lib" }); $app.replaceChildren(libRoot); LIB._sig = "";
+  await loadLib(true);
   const reload = () => { if (libRoot?.isConnected && document.activeElement?.id !== "libq") loadLib().catch(() => {}); };
   poll(reload, 3000); const ev = () => reload(); window.addEventListener("jobs-changed", ev);
   new MutationObserver((_, o) => { if (!libRoot?.isConnected) { window.removeEventListener("jobs-changed", ev); o.disconnect(); } }).observe($app, { childList: true });

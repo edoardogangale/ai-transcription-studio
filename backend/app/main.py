@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import audio, auth, config, db, diarization, engine, exports, hardware, installer, live, llm, postprocess, registry, vocab
+from . import audio, auth, config, db, diarization, engine, exports, hardware, installer, live, llm, notebook, postprocess, registry, vocab
 from .textutil import diff_summary, full_text, wer, word_diff
 
 
@@ -943,6 +943,76 @@ def export_audio_zip(ids: str):
     if not used:
         err(404, "Nessun audio disponibile.")
     return _download(buf.getvalue(), "application/zip", "Audio registrazioni.zip")
+
+
+# ---------------------------------------------------------------- quaderno (testo ricco + inchiostro Apple Pencil)
+def _reindex(t):
+    db.index_text(t["id"], t["title"], full_text([s for s in (t["segments"] or []) if not s.get("off_topic")]))
+
+
+@app.get("/api/transcripts/{tid}/notebook")
+def nb_get(tid: str):
+    nb = _t(tid).get("notebook")
+    return {"exists": bool(nb), **(nb or {})}
+
+
+class NbCreate(BaseModel):
+    teacher_only: bool = True
+    include_notes: bool = True
+    force: bool = False
+
+
+@app.post("/api/transcripts/{tid}/notebook/create")
+def nb_create(tid: str, b: NbCreate):
+    """Crea il quaderno dalla trascrizione (testo fedele in paragrafi, con evidenziazioni e note). Poi è indipendente."""
+    t = _t(tid, True)
+    if t.get("notebook") and not b.force:
+        err(409, "Il quaderno esiste già.")
+    nb = {"v": 1, "html": notebook.initial_html(t, db.note_list(tid), b.teacher_only, b.include_notes), "ink": [], "updated": time.time()}
+    db.update(tid, notebook=nb)
+    _reindex(t)
+    return {"exists": True, **nb}
+
+
+class NbPut(BaseModel):
+    html: str
+    ink: list = []
+
+
+@app.put("/api/transcripts/{tid}/notebook")
+def nb_put(tid: str, b: NbPut):
+    t = _t(tid)
+    if len(b.html) > notebook.MAX_HTML:
+        err(413, "Il quaderno è troppo grande (testo).")
+    ink = notebook.validate_ink(b.ink)
+    if len(json.dumps(ink)) > notebook.MAX_INK:
+        err(413, "Troppo inchiostro in un solo quaderno: cancella o dividi qualche disegno.")
+    nb = {"v": 1, "html": notebook.sanitize(b.html), "ink": ink, "updated": time.time()}
+    db.update(tid, notebook=nb)
+    _reindex(t)
+    return {"ok": True, "updated": nb["updated"], "strokes": len(ink)}
+
+
+@app.delete("/api/transcripts/{tid}/notebook")
+def nb_delete(tid: str):
+    t = _t(tid)
+    db.update(tid, notebook=None)
+    _reindex(db.get(tid))
+    return {"ok": True}
+
+
+@app.get("/api/transcripts/{tid}/notebook/export/{fmt}")
+def nb_export(tid: str, fmt: str):
+    """Testo e DOCX del quaderno (senza inchiostro). Per un PDF con i disegni usa 'Stampa / PDF' dal browser."""
+    t = _t(tid)
+    nb = t.get("notebook")
+    if not nb:
+        err(404, "Quaderno non creato.")
+    if fmt == "txt":
+        return _download(notebook.to_text(nb["html"]).encode("utf-8"), "text/plain; charset=utf-8", f"{_fname(t['title'])} (quaderno).txt")
+    if fmt == "docx":
+        return _download(notebook.to_docx(nb["html"], t["title"]), exports.FORMATS["docx"], f"{_fname(t['title'])} (quaderno).docx")
+    err(400, "Formato non supportato (txt, docx).")
 
 
 # ---------------------------------------------------------------- profili (più persone, archivi separati)

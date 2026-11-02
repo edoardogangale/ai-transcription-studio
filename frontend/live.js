@@ -103,6 +103,10 @@ const Recorder = {
     this.cleanup(); this.state = "idle"; this.emit(); Notif.close("ats-rec");
     Notif.show("Registrazione salvata", "La trascrizione è pronta nell'archivio.", { tag: "rec-done", url: "#/t/" + tid, silent: false });
     toast("✓ Registrazione salvata"); window.dispatchEvent(new CustomEvent("jobs-changed"));
+    if (this.afterModel) {   // ritrascrizione automatica con il modello più accurato scelto prima di registrare
+      const mid = this.afterModel; this.afterModel = "";
+      api(`/api/transcripts/${tid}/retranscribe`, { json: { model_id: mid } }).then(() => toast("Ritrascrizione avviata con " + mname(mid), 5000)).catch(e => toast("Ritrascrizione non avviata: " + e.message, 6000));
+    }
     if (location.hash === "#/live") location.hash = "#/t/" + tid;
   },
   cleanup() { try { this.ws?.close(); } catch {} try { this.stream?.getTracks().forEach(t => t.stop()); } catch {} try { this.ctx?.close(); } catch {} clearInterval(this.timer); clearTimeout(this.reconnectTimer); Wake.off(); try { navigator.mediaSession.playbackState = "none"; } catch {} this.ws = this.ctx = this.stream = this.node = null; },
@@ -135,10 +139,11 @@ function whileMounted(el, fn) { const mo = new MutationObserver(() => { if (!el.
 
 ROUTES.push([/^#\/live$/, async () => {
   const [sys, fl] = await Promise.all([api("/api/system"), api("/api/folders")]); LIB.folders = fl.folders;
-  const cfgs = LSJ.get("live_cfg", { language: "it", model_id: null, context: "Altro", folder_id: CFG.folder, hl: 10 }), root = h("div");
+  const cfgs = Object.assign({ language: "it", model_id: null, context: "Altro", folder_id: CFG.folder, hl: 10, after_model: "" }, LSJ.get("live_cfg", {})), root = h("div");
   const modelsFor = async lang => { const r = await api("/api/models?language=" + lang); return [...r.models, ...r.fast].filter(m => m.compatible && m.installed).map(m => ({ m, rec: m.id === "parakeet-tdt-0.6b-v3" })); };
-  let avail = [];
+  let avail = [], shown = null, ui = null;      // shown = stato di cui è disegnata la vista; ui = riferimenti ai nodi della vista di registrazione
 
+  /* Misuratore del livello audio (disegna su un canvas persistente) */
   const meter = h("canvas", { class: "meter", width: 600, height: 40 }); let raf;
   function drawMeter() { const c = meter.getContext("2d"); c.clearRect(0, 0, 600, 40); const L = Recorder.state === "recording" ? Recorder.level() : 0; const cs = getComputedStyle(document.documentElement); c.fillStyle = cs.getPropertyValue("--accent").trim(); const w = Math.min(1, L * 2.5) * 600; c.fillRect(0, 12, w, 16); c.fillStyle = cs.getPropertyValue("--line").trim(); c.fillRect(w, 19, 600 - w, 2); raf = requestAnimationFrame(drawMeter); }
   whileMounted(root, () => { cancelAnimationFrame(raf); Recorder.listeners.delete(onRec); });
@@ -147,10 +152,11 @@ ROUTES.push([/^#\/live$/, async () => {
   const addNote = () => { Recorder.addNote(noteIn.value); noteIn.value = ""; };
 
   function setupView() {
-    const langSel = h("select", { onchange: async e => { cfgs.language = e.target.value; avail = await modelsFor(cfgs.language); LSJ.set("live_cfg", cfgs); render(); } }, [["it", "Italiano"], ["en", "Inglese"]].map(([v, l]) => h("option", { value: v, selected: cfgs.language === v }, l)));
-    const modelSel = h("select", { onchange: e => { cfgs.model_id = e.target.value; LSJ.set("live_cfg", cfgs); render(); } }, avail.map(({ m }) => h("option", { value: m.id, selected: cfgs.model_id === m.id }, `${m.name}${m.tier === "fast" ? " · veloce" : ""}`)));
+    const langSel = h("select", { onchange: async e => { cfgs.language = e.target.value; avail = await modelsFor(cfgs.language); LSJ.set("live_cfg", cfgs); draw(true); } }, [["it", "Italiano"], ["en", "Inglese"]].map(([v, l]) => h("option", { value: v, selected: cfgs.language === v }, l)));
+    const modelSel = h("select", { onchange: e => { cfgs.model_id = e.target.value; LSJ.set("live_cfg", cfgs); draw(true); } }, avail.map(({ m }) => h("option", { value: m.id, selected: cfgs.model_id === m.id }, `${m.name}${m.tier === "fast" ? " · veloce" : ""}`)));
     const ctxSel = h("select", { onchange: e => { cfgs.context = e.target.value; LSJ.set("live_cfg", cfgs); } }, sys.contexts.map(c => h("option", { value: c, selected: cfgs.context === c }, c)));
     const folderSel = h("select", { onchange: e => { cfgs.folder_id = e.target.value || null; LSJ.set("live_cfg", cfgs); } }, folderOptions().map(o => h("option", { value: o.id, selected: (o.id || null) === cfgs.folder_id }, o.label)));
+    const afterSel = h("select", { onchange: e => { cfgs.after_model = e.target.value; LSJ.set("live_cfg", cfgs); } }, h("option", { value: "" }, "No, tieni la trascrizione live"), avail.map(({ m }) => h("option", { value: m.id, selected: cfgs.after_model === m.id }, "Sì, con " + m.name)));
     const title = h("input", { type: "text", placeholder: "Titolo (facoltativo): es. Filosofia - Kant" });
     const cur = avail.find(a => a.m.id === cfgs.model_id)?.m, rtf = cur && (cur.measured_rtf ?? cur.reference?.rtf);
     const slow = rtf != null && rtf > 0.7;
@@ -159,51 +165,66 @@ ROUTES.push([/^#\/live$/, async () => {
       !sys.websocket && h("div", { class: "notice bad" }, "Il server non ha il supporto WebSocket (serve per il live): esegui  pip install \"uvicorn[standard]\"  oppure  pip install websockets  e riavvia."),
       !navigator.mediaDevices?.getUserMedia && h("div", { class: "notice bad" }, "Il microfono non è disponibile: il browser lo permette solo su HTTPS o localhost. Avvia con ./scripts/start.sh --lan --https."),
       !avail.length && h("div", { class: "notice warn" }, "Nessun modello installato e compatibile per questa lingua. ", h("a", { href: "#/models" }, "Installa un modello →")),
-      h("div", { class: "grid g2" }, h("div", null, h("label", null, "Lingua"), langSel), h("div", null, h("label", null, "Modello"), modelSel),
+      h("div", { class: "grid g2" }, h("div", null, h("label", null, "Lingua"), langSel), h("div", null, h("label", null, "Modello per il live"), modelSel),
         h("div", null, h("label", null, "Materia / contesto"), ctxSel), h("div", null, h("label", null, "Salva in"), folderSel)),
       h("div", { style: "margin-top:10px" }, h("label", null, "Titolo"), title),
       h("div", { class: "notice" + (slow ? " warn" : ""), style: "margin-top:12px" },
         rtf == null ? "Velocità di questo modello su questo PC non ancora misurata: se il testo resta indietro rispetto alla voce, scegli un modello più veloce (Parakeet è il più rapido tra quelli misurati)."
           : slow ? `Attenzione: ${cur.name} ha velocità ${rtf.toFixed(2)}× il tempo reale su questo hardware: il testo resterà indietro e il ritardo crescerà. Puoi registrare lo stesso e ritrascrivere dopo con un altro modello.`
             : `${cur.name}: ${speedText(rtf)}${cur.measured_rtf != null ? " (misurato sul tuo PC)" : " (misura di riferimento, 4 core CPU)"}: adatto al live.`),
+      h("div", { style: "margin-top:12px" }, h("label", null, "Quando finisci, ritrascrivi l'audio con un modello più accurato?"), afterSel,
+        h("div", { class: "m" }, "Il testo live è una bozza (frasi trascritte una alla volta, senza il contesto del resto): la ritrascrizione sull'audio intero di solito è migliore. Resta la versione live e ne crea una seconda.")),
       h("div", { class: "row", style: "margin-top:16px" }, h("button", { class: "primary rec-btn", disabled: !avail.length || !sys.websocket || !navigator.mediaDevices?.getUserMedia || !cfgs.model_id, onclick: async () => {
+        Recorder.afterModel = cfgs.after_model || "";
         try { await Recorder.start({ language: cfgs.language, model_id: cfgs.model_id, context: cfgs.context, title: title.value.trim() || null, folder_id: cfgs.folder_id }); }
-        catch (e) { toast(e.message, 7000); } render(); } }, Recorder.state === "starting" ? "Avvio (carico il modello)…" : "● Inizia registrazione")),
+        catch (e) { toast(e.message, 7000); } } }, Recorder.state === "starting" ? "Avvio (carico il modello)…" : "● Inizia registrazione")),
       h("details", { style: "margin-top:20px" }, h("summary", null, "Registrazione in secondo piano: cosa aspettarsi"),
         h("ul", { class: "m" }, h("li", null, "La trascrizione e il salvataggio dell'audio avvengono sul server: continuano anche se chiudi la pagina."),
           h("li", null, "Il browser può mettere in pausa il microfono se l'app va in secondo piano o lo schermo si blocca (soprattutto su iPad/iPhone). Per questo l'app tiene lo schermo acceso, mostra una notifica persistente e, se la connessione cade, reinvia l'audio mancante."),
           h("li", null, "Se tutto si interrompe, l'audio già inviato viene recuperato al riavvio dell'app."))));
   }
 
+  /* Vista di registrazione: costruita UNA volta; poi si aggiornano solo i testi (i pulsanti restano gli stessi nodi, così i tocchi non si perdono) */
   function recView() {
-    const S = Recorder.status || {}, items = [];
-    Recorder.segs.forEach(s => items.push({ t: s.start, seg: s })); Recorder.notes.filter(n => n.kind === "note").forEach(n => items.push({ t: n.t0, note: n })); items.sort((a, b) => a.t - b.t);
-    const isHl = s => Recorder.notes.some(n => n.kind === "highlight" && n.t0 <= s.end && n.t1 >= s.start);
-    const stopping = Recorder.state === "stopping";
     const hlSel = h("select", { style: "width:auto", onchange: e => { cfgs.hl = +e.target.value; LSJ.set("live_cfg", cfgs); } }, [5, 10, 20, 30, 60].map(v => h("option", { value: v, selected: cfgs.hl === v }, `ultimi ${v} s`)));
-    const live = h("div", { class: "livebox" }, items.length ? items.map(x => x.seg ? h("div", { class: "seg" + (isHl(x.seg) ? " hl" : "") }, h("span", { class: "ts" }, fmtT(x.seg.start)), h("div", { class: "txt" }, x.seg.text)) : h("div", { class: "livenote" }, "✎ " + fmtT(x.note.t0) + " — " + x.note.text))
-      : h("p", { class: "m" }, "In ascolto… il testo appare alla fine di ogni frase."));
-    return h("div", null,
-      h("div", { class: "row sp" }, h("h1", null, Recorder.state === "paused" ? "In pausa" : stopping ? "Salvataggio…" : "● Registrazione"), h("div", { class: "bigtime" }, fmtT(Recorder.elapsed()))),
-      h("div", { class: "m" }, `${mname(Recorder.cfgLive?.model_id)} · trascritto fino a ${fmtT(S.transcribed_s || 0)} · ritardo ${S.lag_s ?? 0} s` + (S.offline ? " · ⚠ connessione persa: riprovo, l'audio non va perso" : "") + (S.error ? " · errore su una frase: " + S.error : "")),
-      meter,
-      h("div", { class: "row", style: "margin:12px 0" },
-        h("button", { class: "star-btn", disabled: stopping, onclick: () => Recorder.highlight(cfgs.hl || 10) }, "★ Evidenzia"), hlSel,
-        Recorder.state === "paused" ? h("button", { onclick: () => Recorder.resume() }, "▶ Riprendi") : h("button", { disabled: stopping, onclick: () => Recorder.pause() }, "⏸ Pausa"),
-        h("button", { class: "danger", disabled: stopping, onclick: () => Recorder.stop() }, "■ Stop e salva")),
-      h("div", { class: "row" }, h("div", { class: "grow" }, noteIn), h("button", { disabled: stopping, onclick: addNote }, "✎ Aggiungi nota")),
-      h("h2", null, "Trascrizione in diretta"), live);
+    const t = { h1: h("h1", null, "● Registrazione"), time: h("div", { class: "bigtime" }, "0:00"), info: h("div", { class: "m" }), live: h("div", { class: "livebox" }), sig: "" };
+    t.star = h("button", { class: "star-btn", onclick: () => Recorder.highlight(cfgs.hl || 10) }, "★ Evidenzia");
+    t.pause = h("button", { onclick: () => (Recorder.state === "paused" ? Recorder.resume() : Recorder.pause()) }, "⏸ Pausa");
+    t.stop = h("button", { class: "danger", onclick: () => Recorder.stop() }, "■ Stop e salva");
+    t.add = h("button", { onclick: addNote }, "✎ Aggiungi nota");
+    ui = t;
+    return h("div", null, h("div", { class: "row sp" }, t.h1, t.time), t.info, meter,
+      h("div", { class: "row", style: "margin:12px 0" }, t.star, hlSel, t.pause, t.stop),
+      h("div", { class: "row" }, h("div", { class: "grow" }, noteIn), t.add),
+      h("h2", null, "Trascrizione in diretta"), t.live);
+  }
+  function update() {
+    if (!ui) return; const S = Recorder.status || {}, st = Recorder.state, stopping = st === "stopping";
+    ui.h1.textContent = st === "paused" ? "In pausa" : stopping ? "Salvataggio…" : "● Registrazione";
+    ui.time.textContent = fmtT(Recorder.elapsed());
+    ui.info.textContent = `${mname(Recorder.cfgLive?.model_id)} · trascritto fino a ${fmtT(S.transcribed_s || 0)} · ritardo ${S.lag_s ?? 0} s` + (S.offline ? " · ⚠ connessione persa: riprovo, l'audio non va perso" : "") + (S.error ? " · errore su una frase: " + S.error : "");
+    const pl = st === "paused" ? "▶ Riprendi" : "⏸ Pausa"; if (ui.pause.textContent !== pl) ui.pause.textContent = pl;
+    [ui.star, ui.pause, ui.stop, ui.add].forEach(b => { if (b.disabled !== stopping) b.disabled = stopping; });
+    const sig = Recorder.segs.length + "/" + Recorder.notes.length;       // il riquadro del testo si ridisegna solo quando arrivano frasi o note nuove
+    if (sig !== ui.sig) {
+      ui.sig = sig; const items = [];
+      Recorder.segs.forEach(s => items.push({ t: s.start, seg: s })); Recorder.notes.filter(n => n.kind === "note").forEach(n => items.push({ t: n.t0, note: n })); items.sort((a, b) => a.t - b.t);
+      const isHl = s => Recorder.notes.some(n => n.kind === "highlight" && n.t0 <= s.end && n.t1 >= s.start);
+      const lb = ui.live, near = lb.scrollHeight - lb.scrollTop - lb.clientHeight < 80;
+      lb.replaceChildren(items.length ? items.map(x => x.seg ? h("div", { class: "seg" + (isHl(x.seg) ? " hl" : "") }, h("span", { class: "ts" }, fmtT(x.seg.start)), h("div", { class: "txt" }, x.seg.text)) : h("div", { class: "livenote" }, "✎ " + fmtT(x.note.t0) + " — " + x.note.text)) : h("p", { class: "m" }, "In ascolto… il testo appare alla fine di ogni frase."));
+      if (near) lb.scrollTop = lb.scrollHeight;
+    }
   }
 
-  async function render() {
-    const body = Recorder.state === "idle" ? setupView() : recView();
-    root.replaceChildren(body);
-    const lb = root.querySelector(".livebox"); if (lb) lb.scrollTop = lb.scrollHeight;
+  function draw(force) {
+    const view = Recorder.state === "idle" || Recorder.state === "starting" ? "setup:" + Recorder.state : "rec";
+    if (force || view !== shown) { shown = view; ui = null; root.replaceChildren(view.startsWith("setup") ? setupView() : recView()); }
+    update();
   }
-  const onRec = () => { if (root.isConnected && Recorder.state !== "idle" && document.activeElement === noteIn) { const lb = root.querySelector(".livebox"); /* non ridisegnare mentre scrivi una nota */ if (lb) { lb.replaceChildren(...recView().querySelector(".livebox").childNodes); lb.scrollTop = lb.scrollHeight; } root.querySelector(".bigtime") && (root.querySelector(".bigtime").textContent = fmtT(Recorder.elapsed())); } else if (root.isConnected) render(); };
+  const onRec = () => { if (root.isConnected) draw(false); };
   Recorder.listeners.add(onRec);
   $app.replaceChildren(root);
   avail = await modelsFor(cfgs.language);
   if (!avail.some(a => a.m.id === cfgs.model_id)) cfgs.model_id = (avail.find(a => a.rec) || avail[0])?.m.id || null;
-  render(); drawMeter();
+  draw(true); drawMeter();
 }]);

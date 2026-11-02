@@ -192,26 +192,49 @@ async function pollActivity() {
   renderActivity();
 }
 function activityCount() { return UP.items.filter(u => u.state !== "done" && u.state !== "error").length + ACT.jobs.filter(j => j.status !== "recording").length + Object.keys(ACT.downloads).length; }
+/* Tocchi: se un dito è appoggiato, i ridisegni periodici aspettano (altrimenti il pulsante viene sostituito e il tocco va perso) */
+let _pressAt = 0;
+["pointerdown", "touchstart", "mousedown"].forEach(ev => addEventListener(ev, () => { _pressAt = Date.now(); }, true));
+["pointerup", "pointercancel", "touchend", "touchcancel", "mouseup"].forEach(ev => addEventListener(ev, () => { setTimeout(() => { _pressAt = 0; }, 80); }, true));
+const isPressing = () => _pressAt && Date.now() - _pressAt < 2500;
+function safeRedraw(fn) { if (isPressing()) setTimeout(() => safeRedraw(fn), 100); else fn(); }
+const sigOf = o => { try { return JSON.stringify(o); } catch { return String(Math.random()); } };
+
+let actStruct = "";
+function activityRows() {
+  const rows = [], rec = window.Recorder && Recorder.state !== "idle";
+  if (rec) rows.push({ key: "rec", icon: "dot", title: Recorder.state === "paused" ? "Registrazione in pausa" : "Registrazione live", pct: null, cls: "rec",
+    sub: fmtT(Recorder.elapsed()) + (Recorder.status?.lag_s > 3 ? ` · trascrizione in ritardo di ${Recorder.status.lag_s}s` : ""), actions: [{ label: "Apri", href: "#/live" }, { label: "Stop", cls: "danger", fn: () => Recorder.stop() }] });
+  UP.items.slice(-8).forEach(u => rows.push({ key: "up:" + u.id, icon: u.state === "done" ? "✓" : u.state === "error" ? "⚠" : "⬆", title: u.name, pct: u.state === "uploading" ? u.pct : null, state: u.state,
+    sub: u.state === "uploading" ? `Caricamento ${Math.round(u.pct)}%` : { queued: "In attesa", done: u.queued ? "Caricato · in trascrizione" : "Caricato", error: u.error || "Errore", ready: "Caricato: scegli il modello e avvia" }[u.state] || u.state,
+    err: u.state === "error", actions: u.state === "uploading" || u.state === "queued" ? [{ label: "✕", fn: () => Uploads.cancel(u.id) }] : [] }));
+  ACT.jobs.filter(j => j.status !== "recording").forEach(j => rows.push({ key: "job:" + j.id, icon: "✎", title: j.title, href: j.group_id ? "#/c/" + j.group_id : "#/t/" + j.id, state: j.status,
+    pct: j.status === "running" ? (j.chunks_total ? 100 * j.chunks_done / j.chunks_total : 0) : null,
+    sub: j.status === "running" ? ((j.stats || {}).phase || "Trascrizione") + (j.chunks_total ? ` · ${j.chunks_done}/${j.chunks_total}` : "") : "In coda",
+    actions: [{ label: "✕", fn: () => api(`/api/transcripts/${j.id}/cancel`, { method: "POST" }) }] }));
+  Object.entries(ACT.downloads).forEach(([id, d]) => rows.push({ key: "dl:" + id, icon: "⬇", title: "Download " + mname(id.replace(/^ai:/, "")), state: d.state, pct: d.total ? 100 * (d.downloaded ?? d.completed ?? 0) / d.total : 0,
+    sub: d.state === "extracting" ? "Estrazione…" : `${fmtB(d.downloaded ?? d.completed ?? 0)} / ${fmtB(d.total || 0)}`, actions: [] }));
+  return rows;
+}
 function renderActivity() {
   const box = document.getElementById("activity"); if (!box) return;
-  const n = activityCount(), rec = window.Recorder && Recorder.state !== "idle";
-  if (!n && !rec && !UP.items.length) { box.replaceChildren(); return; }
-  const bar = p => h("div", { class: "bar" }, h("i", { style: `width:${Math.max(2, p)}%` }));
-  const rows = [];
-  if (rec) rows.push(h("div", { class: "act-row rec" }, h("span", { class: "dot" }), h("div", { class: "grow" }, h("b", null, Recorder.state === "paused" ? "Registrazione in pausa" : "Registrazione live"), h("div", { class: "m" }, fmtT(Recorder.elapsed()) + (Recorder.status?.lag_s > 3 ? ` · trascrizione in ritardo di ${Recorder.status.lag_s}s` : ""))),
-    h("a", { class: "btn small", href: "#/live" }, "Apri"), h("button", { class: "small danger", onclick: () => Recorder.stop() }, "Stop")));
-  UP.items.slice(-8).forEach(u => rows.push(h("div", { class: "act-row" }, h("span", null, u.state === "done" ? "✓" : u.state === "error" ? "⚠" : "⬆"), h("div", { class: "grow" }, h("div", { class: "t" }, u.name),
-    u.state === "uploading" ? bar(u.pct) : h("div", { class: "m" + (u.state === "error" ? " err" : "") }, { queued: "In attesa", done: u.queued ? "Caricato · in trascrizione" : "Caricato", error: u.error || "Errore", ready: "Caricato: scegli il modello e avvia" }[u.state] || u.state)),
-    u.state === "uploading" || u.state === "queued" ? h("button", { class: "small", onclick: () => Uploads.cancel(u.id) }, "✕") : null)));
-  ACT.jobs.filter(j => j.status !== "recording").forEach(j => rows.push(h("a", { class: "act-row", href: j.group_id ? "#/c/" + j.group_id : "#/t/" + j.id }, h("span", null, "✎"), h("div", { class: "grow" }, h("div", { class: "t" }, j.title),
-    j.status === "running" ? [bar(j.chunks_total ? 100 * j.chunks_done / j.chunks_total : 0), h("div", { class: "m" }, ((j.stats || {}).phase || "Trascrizione") + (j.chunks_total ? ` · ${j.chunks_done}/${j.chunks_total}` : ""))] : h("div", { class: "m" }, "In coda")),
-    h("button", { class: "small", onclick: e => { e.preventDefault(); api(`/api/transcripts/${j.id}/cancel`, { method: "POST" }); } }, "✕"))));
-  Object.entries(ACT.downloads).forEach(([id, d]) => rows.push(h("div", { class: "act-row" }, h("span", null, "⬇"), h("div", { class: "grow" }, h("div", { class: "t" }, "Download " + mname(id)), bar(d.total ? 100 * (d.downloaded || 0) / d.total : 0),
-    h("div", { class: "m" }, d.state === "extracting" ? "Estrazione…" : `${fmtB(d.downloaded || 0)} / ${fmtB(d.total || 0)}`)))));
-  const label = rec ? "● Registrazione" : n ? `${n} attività` : "Attività";
-  box.replaceChildren(h("div", { class: "act-wrap" }, ACT.open ? h("div", { class: "act-panel card" }, rows.length ? rows : h("div", { class: "m" }, "Niente in corso."),
-    UP.items.some(u => u.state === "done" || u.state === "error") && h("button", { class: "small", onclick: () => { UP.items = UP.items.filter(u => ["uploading", "queued", "ready"].includes(u.state)); notifyUI(); } }, "Pulisci elenco")) : null,
-    h("button", { class: "act-pill" + (rec ? " rec" : ""), onclick: () => { ACT.open = !ACT.open; renderActivity(); } }, rec ? h("span", { class: "dot" }) : n ? h("span", { class: "spin" }) : null, label)));
+  const n = activityCount(), rec = !!(window.Recorder && Recorder.state !== "idle");
+  if (!n && !rec && !UP.items.length) { if (actStruct) { actStruct = ""; box.replaceChildren(); } return; }
+  const rows = activityRows(), label = rec ? "● Registrazione" : n ? `${n} attività` : "Attività", clearable = UP.items.some(u => u.state === "done" || u.state === "error");
+  const struct = sigOf([ACT.open, rec, label, clearable, rows.map(r => [r.key, r.state, r.err, r.href, r.actions.map(a => a.label), r.pct === null])]);
+  if (struct === actStruct) {   // stessa struttura: si aggiornano solo barre e testi, i pulsanti restano gli stessi nodi
+    rows.forEach(r => { const el = box.querySelector(`[data-key="${CSS.escape(r.key)}"]`); if (!el) return; const i = el.querySelector(".bar i"), sub = el.querySelector(".act-sub"); if (i && r.pct != null) i.style.width = Math.max(2, r.pct) + "%"; if (sub && sub.textContent !== r.sub) sub.textContent = r.sub; });
+    return;
+  }
+  safeRedraw(() => {
+    actStruct = struct;
+    const act = (a, r) => a.href ? h("a", { class: "btn small", href: a.href }, a.label) : h("button", { class: "small" + (a.cls ? " " + a.cls : ""), onclick: e => { e.preventDefault(); a.fn(); } }, a.label);
+    const rowEl = r => { const inner = [h("span", null, r.icon === "dot" ? h("span", { class: "dot" }) : r.icon), h("div", { class: "grow" }, h("div", { class: "t" }, r.title), r.pct != null ? h("div", { class: "bar" }, h("i", { style: `width:${Math.max(2, r.pct)}%` })) : null, h("div", { class: "m act-sub" + (r.err ? " err" : "") }, r.sub)), r.actions.map(a => act(a, r))];
+      return r.href ? h("a", { class: "act-row", href: r.href, "data-key": r.key }, inner) : h("div", { class: "act-row" + (r.cls ? " " + r.cls : ""), "data-key": r.key }, inner); };
+    box.replaceChildren(h("div", { class: "act-wrap" }, ACT.open ? h("div", { class: "act-panel card" }, rows.length ? rows.map(rowEl) : h("div", { class: "m" }, "Niente in corso."),
+      clearable && h("button", { class: "small", onclick: () => { UP.items = UP.items.filter(u => ["uploading", "queued", "ready"].includes(u.state)); notifyUI(); } }, "Pulisci elenco")) : null,
+      h("button", { class: "act-pill" + (rec ? " rec" : ""), onclick: () => { ACT.open = !ACT.open; actStruct = ""; renderActivity(); } }, rec ? h("span", { class: "dot" }) : n ? h("span", { class: "spin" }) : null, label)));
+  });
 }
 
 /* ---------- caricamenti globali: continuano anche se cambi pagina ---------- */

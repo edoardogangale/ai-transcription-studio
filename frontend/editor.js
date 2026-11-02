@@ -219,6 +219,7 @@ ROUTES.push([/^#\/t\/(\w+)$/, async id => {
 
   $app.replaceChildren(
     h("div", { class: "row sp" }, title, h("div", { class: "row" },
+      h("a", { class: "btn", href: "#/n/" + id, title: "Testo libero modificabile con tastiera e Apple Pencil" }, "📓 Quaderno"),
       h("button", { onclick: async () => { try { await copyTranscripts([id], expOpt()); } catch (e) { toast(e.message); } } }, "⧉ Copia"), exp,
       h("button", { onclick: () => shareAudio([{ id, title: t.title }]) }, "↗ Condividi audio"),
       h("button", { onclick: async () => { const sel = h("select", null, folderOptions().map(o => h("option", { value: o.id, selected: (o.id || null) === (t.folder_id || null) }, o.label))); const r = await modal("Sposta in…", sel, [["Annulla", null], ["Sposta", () => ({ v: sel.value }), "primary"]]); if (r) { await api("/api/transcripts/" + id, { method: "PATCH", json: { set_folder: true, folder_id: r.v || null } }); toast("Spostata"); route(); } } }, "📁 " + (t.folder_path || "Senza cartella")),

@@ -1,3 +1,4 @@
+import { createNotebook, INK_CSS, PAPERS, SIZES } from "./ink.js";
 // Trascrizione sul dispositivo: tutto gira nel browser (audio, modello, archivio). Nessun server.
 const MODELS = {
   "onnx-community/whisper-tiny": ["Tiny — velocissimo, qualità bassa", 40],
@@ -9,11 +10,13 @@ const LANGS = { italian: "Italiano", english: "English", auto: "Rileva da solo" 
 const $ = (s, r = document) => r.querySelector(s);
 function h(tag, attrs, ...kids) { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs || {})) { if (k === "class") e.className = v; else if (k.startsWith("on")) e.addEventListener(k.slice(2), v); else if (v !== false && v != null) e.setAttribute(k, v); } for (const k of kids.flat()) if (k != null && k !== false) e.append(k.nodeType ? k : document.createTextNode(k)); return e; }
 const cfg = { get: (k, d) => { try { return localStorage.getItem("od_" + k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem("od_" + k, v); } catch {} } };
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+function toast(m) { const t = h("div", { class: "apptoast" }, m); document.body.append(t); setTimeout(() => t.remove(), 1800); }
 const fmt = s => { s = Math.max(0, Math.round(s)); const m = Math.floor(s / 60); return `${String(m).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`; };
 
 // ---------- archivio (IndexedDB) ----------
 let _db;
-function db() { return _db ||= new Promise((res, rej) => { const r = indexedDB.open("od-studio", 1); r.onupgradeneeded = () => { r.result.createObjectStore("notes", { keyPath: "id" }); r.result.createObjectStore("audio"); }; r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
+function db() { return _db ||= new Promise((res, rej) => { const r = indexedDB.open("od-studio", 2); r.onupgradeneeded = () => { const d = r.result; if (!d.objectStoreNames.contains("notes")) d.createObjectStore("notes", { keyPath: "id" }); if (!d.objectStoreNames.contains("audio")) d.createObjectStore("audio"); if (!d.objectStoreNames.contains("pages")) d.createObjectStore("pages", { keyPath: "id" }); }; r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
 async function tx(store, mode, fn) { const d = await db(); return new Promise((res, rej) => { const t = d.transaction(store, mode); const out = fn(t.objectStore(store)); t.oncomplete = () => res(out && out.result !== undefined ? out.result : out); t.onerror = () => rej(t.error); }); }
 const putNote = n => tx("notes", "readwrite", s => s.put(n));
 const getNote = id => tx("notes", "readonly", s => s.get(id));
@@ -89,49 +92,111 @@ function go(hash) { location.hash = hash; }
 async function route() {
   if (cleanup) { try { await cleanup(); } catch {} cleanup = null; }
   const [view, arg] = (location.hash || "#/").slice(2).split("/");
-  app.replaceChildren();
-  ({ "": home, rec, note: detail, test, import: importView }[view] || home)(arg);
+  app.replaceChildren(); app.classList.remove("full");
+  ({ "": home, rec, note: detail, test, import: importView, page: pageView }[view] || home)(arg);
 }
 addEventListener("hashchange", route);
 const modelSel = () => h("select", { "aria-label": "Modello", onchange: e => cfg.set("model", e.target.value) }, Object.entries(MODELS).map(([k, [n]]) => h("option", { value: k, selected: k === cfg.get("model", "onnx-community/whisper-small") }, n)));
 const langSel = () => h("select", { "aria-label": "Lingua", onchange: e => cfg.set("lang", e.target.value) }, Object.entries(LANGS).map(([k, n]) => h("option", { value: k, selected: k === cfg.get("lang", "italian") }, n)));
 function confirmBox(msg) { return new Promise(res => { const o = h("div", { style: "position:fixed;inset:0;background:#000a;display:flex;align-items:center;justify-content:center;padding:20px;z-index:9" }, h("div", { class: "card" }, h("p", null, msg), h("div", { class: "row" }, h("button", { class: "danger", onclick: () => { o.remove(); res(true); } }, "Elimina"), h("button", { onclick: () => { o.remove(); res(false); } }, "Annulla")))); document.body.append(o); }); }
 
+// ---------- appunti (pagine del quaderno) ----------
+const putPage = p => tx("pages", "readwrite", s => s.put(p));
+const getPage = id => tx("pages", "readonly", s => s.get(id));
+const allPages = async () => (await tx("pages", "readonly", s => s.getAll())).sort((a, b) => (b.updated || b.created) - (a.updated || a.created));
+const delPage = id => tx("pages", "readwrite", s => s.delete(id));
+function newPage(title, extra) {
+  const sz = cfg.get("paper_size", "a4"), [, w, hgt] = SIZES[sz] || SIZES.a4;
+  return { id: "p" + Date.now() + Math.random().toString(36).slice(2, 5), title, created: Date.now(), updated: Date.now(), w, h: hgt, paper: { type: cfg.get("paper_type", "lines"), gap: +cfg.get("paper_gap", "32"), color: "#ffffff", size: sz }, strokes: [], texts: [], ...(extra || {}) };
+}
+function newPageDialog() {
+  return new Promise(res => {
+    let type = cfg.get("paper_type", "lines"), size = cfg.get("paper_size", "a4"), gap = cfg.get("paper_gap", "32");
+    const seg = (vals, get, set) => { const d = h("div", { class: "segc" }); const draw = () => d.replaceChildren(...Object.entries(vals).map(([k, v]) => h("button", { class: get() === k ? "on" : "", onclick: () => { set(k); draw(); prev(); } }, Array.isArray(v) ? v[0] : v))); draw(); return d; };
+    const pv = h("div", { class: "paperprev" }); const prev = () => { pv.className = "paperprev " + type; pv.style.setProperty("--gap", (gap / 2.2) + "px"); const [, w, hh] = SIZES[size]; pv.style.aspectRatio = `${w}/${hh}`; };
+    const name = h("input", { type: "text", value: "Appunti " + new Date().toLocaleDateString("it-IT"), "aria-label": "Titolo" });
+    const o = h("div", { class: "modal" }, h("div", { class: "card sheet" }, h("h2", null, "Nuova pagina"), name,
+      h("div", { class: "mut" }, "Carta"), seg(PAPERS, () => type, v => type = v),
+      h("div", { class: "mut" }, "Formato"), seg(SIZES, () => size, v => size = v),
+      h("div", { class: "mut" }, "Distanza righe/quadretti"), seg({ 24: "Stretta", 32: "Media", 44: "Larga" }, () => gap, v => gap = v), pv,
+      h("div", { class: "row" }, h("button", { class: "primary", onclick: () => { cfg.set("paper_type", type); cfg.set("paper_size", size); cfg.set("paper_gap", gap); o.remove(); res(name.value.trim() || "Appunti"); } }, "Crea"), h("button", { onclick: () => { o.remove(); res(null); } }, "Annulla"))));
+    document.body.append(o); prev();
+  });
+}
+
 async function home() {
-  const list = h("div");
+  const list = h("div"), pages = h("div", { class: "pages" });
   app.append(h("h1", null, "Trascrizione sul dispositivo"), h("div", { class: "mut" }, "Tutto resta su questo iPad. Nessun server, nessun account."),
     h("div", { class: "card" }, h("div", { class: "row" }, h("div", { class: "grow" }, "Modello"), modelSel()), h("div", { class: "row" }, h("div", { class: "grow" }, "Lingua"), langSel()),
-      h("div", { class: "row" }, h("button", { class: "primary", onclick: () => go("#/rec") }, "● Registra e trascrivi"), h("button", { onclick: () => go("#/import") }, "Carica un audio"), h("button", { onclick: () => go("#/test") }, "Test dispositivo"))),
-    h("h2", null, "Le tue trascrizioni"), list);
+      h("div", { class: "row" }, h("button", { class: "primary", onclick: () => go("#/rec") }, "● Registra e prendi appunti"), h("button", { onclick: () => go("#/import") }, "Carica un audio"), h("button", { onclick: () => go("#/test") }, "Test dispositivo"))),
+    h("div", { class: "row" }, h("h2", { class: "grow" }, "Appunti"), h("button", { class: "primary", onclick: async () => { const t = await newPageDialog(); if (!t) return; const p = newPage(t); await putPage(p); go("#/page/" + p.id); } }, "+ Nuova pagina")), pages,
+    h("h2", null, "Registrazioni"), list);
+  const ps = await allPages();
+  pages.replaceChildren(...(ps.length ? ps.map(p => h("button", { class: "pagecard", onclick: () => go("#/page/" + p.id) }, h("div", { class: "thumb paperprev " + (p.paper?.type || "lines") }), h("b", null, p.title), h("span", { class: "mut" }, new Date(p.updated || p.created).toLocaleDateString("it-IT") + (p.noteId ? " · 🎙" : "")))) : [h("div", { class: "mut" }, "Nessuna pagina. Crea una pagina o registra una lezione: gli appunti si creano da soli.")]));
   const notes = await allNotes();
-  list.replaceChildren(...(notes.length ? notes.map(n => h("div", { class: "card", onclick: () => go("#/note/" + n.id), style: "cursor:pointer" }, h("b", null, n.title), h("div", { class: "mut" }, `${new Date(n.created).toLocaleString("it-IT")} · ${fmt(n.duration || 0)} · ${(MODELS[n.model] || [n.model])[0].split(" — ")[0]}${n.status !== "done" ? " · interrotta" : ""}`))) : [h("div", { class: "mut" }, "Ancora nulla. Premi «Registra e trascrivi».")]));
+  list.replaceChildren(...(notes.length ? notes.map(n => h("div", { class: "card", onclick: () => go("#/note/" + n.id), style: "cursor:pointer" }, h("b", null, n.title), h("div", { class: "mut" }, `${new Date(n.created).toLocaleString("it-IT")} · ${fmt(n.duration || 0)} · ${(MODELS[n.model] || [n.model])[0].split(" — ")[0]}${n.status !== "done" ? " · interrotta" : ""}`))) : [h("div", { class: "mut" }, "Ancora nulla. Premi «Registra e prendi appunti».")]));
+}
+
+// trascrizione: il testo detto è nero; ciò che aggiunge l'app (orari, paragrafi, avvisi) è viola e corsivo
+function transcriptView() {
+  const box = h("div", { class: "tx" }); let lastEnd = -1, follow = true;
+  box.addEventListener("scroll", () => { follow = box.scrollTop + box.clientHeight > box.scrollHeight - 40; });
+  const api = {
+    el: box,
+    add(seg, animate = true) {
+      if (lastEnd < 0 || seg.start - lastEnd > 4) box.append(h("div", { class: "meta para" + (animate ? " in" : "") }, `¶ ${lastEnd < 0 ? "Inizio" : "Nuovo paragrafo"} · ${fmt(seg.start)}`));
+      const p = box.lastElementChild && box.lastElementChild.classList.contains("spoken") ? box.lastElementChild : box.appendChild(h("p", { class: "spoken" }));
+      const words = seg.text.split(/\s+/).filter(Boolean);
+      words.forEach((w, i) => { const s = h("span", { class: animate ? "w" : "" }, w); if (animate) s.style.animationDelay = (i * 55) + "ms"; p.append(s, " "); });
+      lastEnd = seg.start + (seg.dur || 3);
+      if (follow) requestAnimationFrame(() => box.scrollTo({ top: box.scrollHeight, behavior: animate ? "smooth" : "auto" }));
+    },
+    meta(text, cls = "") { box.append(h("div", { class: "meta in " + cls }, text)); if (follow) box.scrollTop = box.scrollHeight; },
+  };
+  return api;
 }
 
 async function rec() {
+  app.classList.add("full");
   const model = cfg.get("model", "onnx-community/whisper-small"), lang = cfg.get("lang", "italian");
-  const box = h("div"), status = h("div", { class: "mut" }), txt = h("div", { class: "big card" }, ""), btn = h("button", { class: "primary", disabled: true }, "Attendi…"), lag = h("div", { class: "mut" });
-  app.append(h("h1", null, "Registrazione"), box, h("div", { class: "row" }, btn, h("button", { onclick: () => go("#/") }, "Indietro")), status, lag, txt);
-  if (!navigator.mediaDevices?.getUserMedia) { box.append(h("div", { class: "bad" }, "Il microfono non è disponibile: apri l'app dall'indirizzo https e consenti il microfono.")); return; }
-  loadUI(box);
-  try { await Engine.load(model); } catch (e) { box.replaceChildren(h("div", { class: "bad" }, "Modello non caricato: " + e.message, h("br"), "Serve Internet la prima volta (e prova un modello più piccolo)."), h("button", { onclick: () => go("#/rec") }, "Riprova")); return; }
-  box.replaceChildren(h("div", { class: "ok" }, `Modello pronto (${Engine.device === "webgpu" ? "GPU" : "CPU: più lento"}).`));
-  let stream; try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true } }); } catch (e) { box.append(h("div", { class: "bad" }, "Microfono negato: consentilo nelle impostazioni di Safari.")); return; }
+  const box = h("div", { class: "recmsg" }), status = h("span", { class: "recstat" }, "Preparazione…"), lag = h("span", { class: "mut" });
+  const tv = transcriptView(), btn = h("button", { class: "primary", disabled: true }, "Attendi…");
+  const panel = h("aside", { class: "txpanel" }, h("div", { class: "txhead" }, h("b", null, "Trascrizione live"), h("span", { class: "legend" }, h("i", { class: "lg-s" }), "detto ", h("i", { class: "lg-m" }), "aggiunto dall'app")), box, tv.el);
+  const handle = h("div", { class: "split-h", "aria-label": "Ridimensiona" });
+  const nbHost = h("div", { class: "nbhost" });
+  const back = h("button", { class: "ib", "aria-label": "Indietro", onclick: () => go("#/") }, "‹");
+  const head = h("div", { class: "rechead" }, back, status, lag);
+  const body = h("div", { class: "split" }, nbHost, handle, panel);
+  app.append(body);
+  const savedW = +cfg.get("txw", "360"); panel.style.setProperty("--w", savedW + "px");
+  handle.addEventListener("pointerdown", e => { e.preventDefault(); const portrait = innerHeight > innerWidth; const r = body.getBoundingClientRect(); const mv = ev => { const v = portrait ? clamp(r.bottom - ev.clientY, 120, r.height - 200) : clamp(r.right - ev.clientX, 220, r.width - 300); panel.style.setProperty("--w", v + "px"); cfg.set("txw", v); }; const up = () => { removeEventListener("pointermove", mv); removeEventListener("pointerup", up); }; addEventListener("pointermove", mv); addEventListener("pointerup", up); });
   const id = "n" + Date.now(), t0 = Date.now(), note = { id, title: "Lezione " + new Date().toLocaleString("it-IT", { dateStyle: "short", timeStyle: "short" }), created: t0, duration: 0, model, lang, status: "recording", segments: [] };
-  await putNote(note);
+  const page = newPage(note.title, { noteId: id }); note.pageId = page.id;
+  const nb = createNotebook(nbHost, page, { header: head, onChange: p => putPage(p) });
+  head.after(btn); const pauseB = h("button", { disabled: true }, "Pausa"); btn.after(pauseB);
+  let finished = false;
+  cleanup = async () => { if (finishFn) await finishFn(); nb.destroy(); app.classList.remove("full"); };
+  let finishFn = null;
+  if (!navigator.mediaDevices?.getUserMedia) { box.append(h("div", { class: "bad" }, "Il microfono non è disponibile: apri l'app dall'indirizzo https e consenti il microfono. Puoi comunque prendere appunti.")); status.textContent = "Solo appunti"; delete page.noteId; await putPage(page); return; }
+  loadUI(box);
+  try { await Engine.load(model); } catch (e) { box.replaceChildren(h("div", { class: "bad" }, "Modello non caricato: " + e.message + " — serve Internet la prima volta (prova un modello più piccolo). Puoi comunque prendere appunti."), h("button", { onclick: () => location.reload() }, "Riprova")); status.textContent = "Solo appunti"; delete page.noteId; await putPage(page); return; }
+  box.replaceChildren();
+  tv.meta(`Modello pronto · ${Engine.device === "webgpu" ? "GPU" : "CPU (più lento)"} · ${(MODELS[model] || [model])[0].split(" — ")[0]}`);
+  let stream; try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true } }); } catch (e) { tv.meta("Microfono negato: consentilo nelle impostazioni di Safari. Puoi comunque prendere appunti.", "bad"); status.textContent = "Solo appunti"; delete page.noteId; await putPage(page); return; }
+  await putNote(note); await putPage(page);
   let received = 0, doneTo = 0, pending = 0, chain = Promise.resolve(), paused = false, wake = null, stopped = false, ai = 0;
   const ctx = new (window.AudioContext || window.webkitAudioContext)(); await ctx.resume();
   const src = ctx.createMediaStreamSource(stream), proc = ctx.createScriptProcessor(4096, 1, 1), mute = ctx.createGain(); mute.gain.value = 0;
-  const seg = new Segmenter((start, audio) => { pending++; const dur = audio.length / 16000; chain = chain.then(async () => { try { const r = await Engine.run(audio, lang); if (r.text) { note.segments.push({ start, text: r.text }); txt.append(h("span", null, r.text + " ")); await putNote(note); } doneTo = start + dur; } catch (e) { status.replaceChildren(h("span", { class: "bad" }, "Errore su una frase: " + e.message)); } pending--; }); });
+  const seg = new Segmenter((start, audio) => { pending++; const dur = audio.length / 16000; chain = chain.then(async () => { try { const r = await Engine.run(audio, lang); if (r.text) { const s = { start, dur, text: r.text }; note.segments.push(s); tv.add(s); await putNote(note); } doneTo = start + dur; } catch (e) { tv.meta("Errore su una frase: " + e.message, "bad"); } pending--; }); });
   proc.onaudioprocess = e => { if (paused || stopped) return; const d = e.inputBuffer.getChannelData(0); received += d.length / ctx.sampleRate; seg.feed(downsample(new Float32Array(d), ctx.sampleRate)); };
   src.connect(proc); proc.connect(mute); mute.connect(ctx.destination);
-  let mr; try { mr = new MediaRecorder(stream); mr.ondataavailable = e => { if (e.data.size) putAudio(id, ai++, e.data); }; mr.onstop = () => {}; mr.start(5000); note.mime = mr.mimeType; } catch { status.append(h("div", { class: "bad" }, "Il salvataggio dell'audio non è supportato su questo browser: avrai solo il testo.")); }
+  let mr; try { mr = new MediaRecorder(stream); mr.ondataavailable = e => { if (e.data.size) putAudio(id, ai++, e.data); }; mr.start(5000); note.mime = mr.mimeType; } catch { tv.meta("Il salvataggio dell'audio non è supportato su questo browser: avrai solo il testo.", "bad"); }
   try { wake = await navigator.wakeLock?.request("screen"); } catch {}
-  const tick = setInterval(() => { const l = Math.max(0, received - doneTo); status.textContent = `● ${fmt(received)}${paused ? " (in pausa)" : ""}`; lag.textContent = pending ? `Ritardo trascrizione: ~${Math.round(l)} s` + (l > 45 ? " — il modello è lento per questo iPad: dopo la lezione riascolta o scegli un modello più piccolo." : "") : ""; }, 500);
-  btn.disabled = false; btn.textContent = "■ Stop e salva";
-  const pause = h("button", { onclick: () => { paused = !paused; if (mr) paused ? mr.pause() : mr.resume(); pause.textContent = paused ? "Riprendi" : "Pausa"; } }, "Pausa"); btn.after(pause);
-  const finish = async () => { if (stopped) return; stopped = true; clearInterval(tick); btn.disabled = true; btn.textContent = "Salvo…"; seg.flush(); try { mr && mr.state !== "inactive" && mr.stop(); } catch {} stream.getTracks().forEach(t => t.stop()); proc.disconnect(); ctx.close(); wake && wake.release().catch(() => {}); await chain; await new Promise(r => setTimeout(r, 400)); note.status = "done"; note.duration = received; await putNote(note); };
-  btn.onclick = async () => { await finish(); go("#/note/" + id); };
-  cleanup = async () => { if (!stopped) { await finish(); } };
+  const tick = setInterval(() => { const l = Math.max(0, received - doneTo); status.textContent = `${paused ? "❚❚" : "●"} ${fmt(received)}`; status.classList.toggle("paused", paused); lag.textContent = pending ? ` · ritardo ~${Math.round(l)} s` + (l > 45 ? " (modello lento: scegline uno più piccolo)" : "") : ""; }, 500);
+  btn.disabled = false; btn.textContent = "■ Stop"; pauseB.disabled = false;
+  pauseB.onclick = () => { paused = !paused; if (mr) try { paused ? mr.pause() : mr.resume(); } catch {} pauseB.textContent = paused ? "Riprendi" : "Pausa"; tv.meta(paused ? `❚❚ In pausa · ${fmt(received)}` : `▶ Ripresa · ${fmt(received)}`); };
+  finishFn = async () => { if (stopped) return; stopped = true; clearInterval(tick); btn.disabled = true; btn.textContent = "Salvo…"; seg.flush(); try { mr && mr.state !== "inactive" && mr.stop(); } catch {} stream.getTracks().forEach(t => t.stop()); proc.disconnect(); ctx.close(); wake && wake.release().catch(() => {}); await chain; await new Promise(r => setTimeout(r, 400)); note.status = "done"; note.duration = received; await putNote(note); await putPage(nb.page); window.onbeforeunload = null; };
+  btn.onclick = async () => { await finishFn(); go("#/note/" + id); };
   window.onbeforeunload = () => stopped ? null : "Registrazione in corso";
 }
 
@@ -165,15 +230,30 @@ async function detail(id) {
   if (blob) { const url = URL.createObjectURL(blob); cleanup = () => URL.revokeObjectURL(url); aud.append(h("audio", { controls: "", src: url, style: "width:100%" })); }
   const dl = (b, name) => { const a = h("a", { href: URL.createObjectURL(b), download: name }); document.body.append(a); a.click(); a.remove(); };
   const file = blob && new File([blob], `${n.title}.${ext}`, { type: blob.type });
+  const tv = transcriptView(); tv.el.classList.add("static"); n.segments.forEach(s => tv.add(s, false));
+  const page = n.pageId && await getPage(n.pageId);
   app.append(h("div", { class: "row" }, h("button", { onclick: () => go("#/") }, "← Indietro")), title,
     h("div", { class: "mut" }, `${new Date(n.created).toLocaleString("it-IT")} · ${fmt(n.duration || 0)}${n.status !== "done" ? " · registrazione interrotta (testo parziale)" : ""}`), aud,
     h("div", { class: "row" },
-      h("button", { class: "primary", onclick: async () => { try { await navigator.clipboard.writeText(text); } catch { prompt("Copia il testo:", text); } } }, "Copia testo"),
+      page && h("button", { class: "primary", onclick: () => go("#/page/" + page.id) }, "✎ Apri gli appunti"),
+      h("button", { onclick: async () => { try { await navigator.clipboard.writeText(text); toast("Testo copiato"); } catch { prompt("Copia il testo:", text); } } }, "Copia testo"),
       h("button", { onclick: () => dl(new Blob([text], { type: "text/plain" }), n.title + ".txt") }, "Scarica .txt"),
       blob && h("button", { onclick: async () => { try { if (navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file], title: n.title }); else dl(blob, file.name); } catch {} } }, "Condividi audio"),
-      h("button", { class: "danger", onclick: async () => { if (await confirmBox("Eliminare questa trascrizione e il suo audio?")) { await delNote(id); go("#/"); } } }, "Elimina")),
-    h("div", { class: "card" }, ...(n.segments.length ? n.segments.map(s => h("div", { class: "seg" }, h("span", { class: "t" }, fmt(s.start)), s.text)) : [h("div", { class: "mut" }, "Nessun testo.")])),
+      h("button", { class: "danger", onclick: async () => { if (await confirmBox("Eliminare questa registrazione e il suo audio?" + (page ? " Gli appunti scritti restano in «Appunti»." : ""))) { await delNote(id); go("#/"); } } }, "Elimina")),
+    h("div", { class: "card" }, n.segments.length ? tv.el : h("div", { class: "mut" }, "Nessun testo.")),
     h("div", { class: "mut" }, "Per la qualità massima: condividi l'audio e ritrascrivilo con l'app server (modelli grandi, parlanti, correzione AI)."));
+}
+
+async function pageView(id) {
+  const p = await getPage(id); if (!p) return go("#/");
+  app.classList.add("full");
+  const title = h("input", { type: "text", class: "ptitle", value: p.title, "aria-label": "Titolo", onchange: () => { p.title = title.value; putPage(p); } });
+  const head = h("div", { class: "rechead" }, h("button", { class: "ib", "aria-label": "Indietro", onclick: () => go("#/") }, "‹"), title,
+    p.noteId && h("button", { class: "ib small", onclick: () => go("#/note/" + p.noteId) }, "🎙"),
+    h("button", { class: "ib small", "aria-label": "Elimina pagina", onclick: async () => { if (await confirmBox("Eliminare questa pagina di appunti?")) { p._deleted = true; await delPage(id); go("#/"); } } }, "🗑"));
+  const host = h("div", { class: "nbhost solo" }); app.append(host);
+  const nb = createNotebook(host, p, { header: head, onChange: x => { if (!x._deleted) putPage(x); } });
+  cleanup = () => { nb.destroy(); app.classList.remove("full"); };
 }
 
 async function test() {
@@ -190,6 +270,7 @@ async function test() {
   app.append(h("h1", null, "Test dispositivo"), out, box, r, h("div", { class: "row" }, modelSel(), h("button", { class: "primary", onclick: async e => { e.target.disabled = true; const t = performance.now(); loadUI(box); try { await Engine.load(cfg.get("model", "onnx-community/whisper-small")); r.textContent = `Modello caricato in ${((performance.now() - t) / 1000).toFixed(1)} s su ${Engine.device === "webgpu" ? "GPU" : "CPU"}. La velocità vera si vede nel «Ritardo trascrizione» durante la registrazione: se cresce, scegli un modello più piccolo.`; } catch (err) { r.replaceChildren(h("span", { class: "bad" }, "Errore: " + err.message)); } e.target.disabled = false; } }, "Scarica e prova il modello"), h("button", { onclick: () => go("#/") }, "Indietro")));
 }
 
+document.head.append(h("style", null, INK_CSS));
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 // recupero: registrazioni rimaste "in corso" dopo una chiusura improvvisa
 (async () => { for (const n of await allNotes()) if (n.status === "recording" && Date.now() - n.created > 60000 && !(location.hash || "").includes(n.id)) { n.status = "interrupted"; await putNote(n); } route(); })();

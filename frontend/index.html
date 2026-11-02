@@ -16,13 +16,21 @@
   <a class="brand" href="#/"><span class="logo">◖◗</span> Transcription Studio</a>
   <nav>
     <a href="#/" data-nav="">Archivio</a>
+    <a href="#/live" data-nav="live">● Live</a>
     <a href="#/models" data-nav="models">Modelli AI</a>
     <a href="#/settings" data-nav="settings">Impostazioni</a>
   </nav>
   <button id="themeBtn" class="icon-btn" title="Tema chiaro/scuro" aria-label="Cambia tema">◐</button>
 </header>
 <main id="app" aria-live="polite"></main>
+<div id="activity"></div>
 <div id="toast" role="status"></div>
-<script src="app.js"></script>
+<script src="core.js"></script>
+<script src="library.js"></script>
+<script src="new.js"></script>
+<script src="live.js"></script>
+<script src="editor.js"></script>
+<script src="misc.js"></script>
+<script>startApp();</script>
 </body>
 </html>

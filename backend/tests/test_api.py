@@ -37,6 +37,7 @@ def test_exactly_three_models_per_language(client):
         r = client.get("/api/models", params={"language": lang}).json()
         real = [m for m in r["models"] if not m["id"].startswith("mock")]
         assert len(real) == 3, lang
+        assert [m["id"] for m in r["fast"]] == ["whisper-small", "whisper-base"]
         assert {"name", "installed", "compatible", "license", "verification", "benchmark"} <= real[0].keys()
     it = [m["id"] for m in client.get("/api/models?language=it").json()["models"]]
     en = [m["id"] for m in client.get("/api/models?language=en").json()["models"]]
@@ -52,10 +53,12 @@ def test_no_invented_benchmarks(client):
 def test_incompatible_and_uninstalled_models_blocked(client, wav):
     m = upload(client, wav)
     base = {"upload_id": m["upload_id"], "language": "it"}
-    r = client.post("/api/transcripts", json=base | {"model_id": "voxtral-mini-4b-realtime"})
-    assert r.status_code == 422 and "GPU" in r.json()["detail"]
     r = client.post("/api/transcripts", json=base | {"model_id": "whisper-large-v3"})
-    assert r.status_code in (409, 422)
+    assert r.status_code in (409, 422)  # non installato (o RAM insufficiente)
+    client.put("/api/settings", json={"device": "cuda"})  # nessuna GPU in questo ambiente
+    r = client.post("/api/transcripts", json=base | {"model_id": "parakeet-tdt-0.6b-v3"})
+    client.put("/api/settings", json={"device": "auto"})
+    assert r.status_code == 422 and "GPU" in r.json()["detail"]
     r = client.post("/api/transcripts", json=base | {"model_id": "parakeet-tdt-0.6b-v2"})  # EN-only su lingua IT
     assert r.status_code == 400
 
@@ -127,7 +130,7 @@ def test_exports_keep_accents(client, done_tid):
 
 def test_notes_need_local_llm(client, done_tid):
     tid = done_tid
-    r = client.post(f"/api/transcripts/{tid}/notes", json={"llm": "x"})
+    r = client.post(f"/api/transcripts/{tid}/study-notes", json={"llm": "x"})
     assert r.status_code == 422 and "LLM" in r.json()["detail"]
 
 

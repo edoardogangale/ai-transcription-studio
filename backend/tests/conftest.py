@@ -5,8 +5,9 @@ import tempfile
 from pathlib import Path
 
 _tmp = tempfile.mkdtemp(prefix="studio-test-")
-os.environ["STUDIO_DATA"] = _tmp
-os.environ["STUDIO_ENABLE_MOCK"] = "1"
+if os.environ.get("STUDIO_REAL") != "1":
+    os.environ["STUDIO_DATA"] = _tmp
+    os.environ["STUDIO_ENABLE_MOCK"] = "1"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest

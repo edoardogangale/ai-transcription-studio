@@ -1,122 +1,149 @@
-"""Adattatori dei modelli. Interfaccia comune:
+"""Adattatori dei modelli (tutti su sherpa-onnx). Interfaccia comune:
     load(device) ; transcribe(samples_f32_16k, language, prompt) -> [ {start,end,text,words?} ] ; unload()
-I tempi sono relativi all'inizio del campione passato. Nessun adattatore è stato eseguito con pesi reali in
-questo ambiente (Hugging Face irraggiungibile): vedi README, sezione "Cosa NON è stato verificato"."""
+I tempi sono relativi all'inizio del campione passato. L'adattatore è thread-safe (lock interno), così più lavori
+possono usare lo stesso modello alternandosi chunk per chunk."""
 import gc
+import os
+import threading
+from pathlib import Path
+
 from . import registry
 
 
 class ASRAdapter:
     word_timestamps = False
+    detected = None
+
+    def __init__(self):
+        self.lock = threading.Lock()
 
     def load(self, device: str): ...
     def transcribe(self, samples, language, prompt=None): raise NotImplementedError
     def unload(self): gc.collect()
 
 
-class WhisperAdapter(ASRAdapter):
-    word_timestamps = True
-
-    def load(self, device):
-        from faster_whisper import WhisperModel
-        compute = "float16" if device == "cuda" else "int8"
-        self.model = WhisperModel(str(registry.model_dir("whisper-large-v3")), device=device, compute_type=compute)
-
-    def transcribe(self, samples, language, prompt=None):
-        # VAD interno disattivato: la segmentazione è già fatta a monte. condition_on_previous_text=False
-        # evita la propagazione di allucinazioni/ripetizioni tra finestre.
-        segs, info = self.model.transcribe(
-            samples, language=None if language == "auto" else language, beam_size=5, word_timestamps=True,
-            condition_on_previous_text=False, initial_prompt=prompt or None, vad_filter=False)
-        out = []
-        for s in segs:
-            words = [{"w": w.word.strip(), "s": round(w.start, 3), "e": round(w.end, 3)} for w in (s.words or [])]
-            out.append({"start": round(s.start, 3), "end": round(s.end, 3), "text": s.text.strip(), "words": words})
-        self.detected = info.language
-        return out
-
-    def unload(self):
-        self.model = None
-        gc.collect()
+def _find(d: Path, *patterns):
+    """Primo file che combacia, preferendo le versioni int8 (più leggere su CPU)."""
+    hits = []
+    for p in patterns:
+        hits += sorted(d.glob(p))
+    hits = [h for h in hits if h.suffix == ".onnx"] or hits
+    int8 = [h for h in hits if "int8" in h.name]
+    return str((int8 or hits)[0]) if hits else None
 
 
-class ParakeetAdapter(ASRAdapter):
+def _threads():
+    return max(1, int(os.environ.get("STUDIO_THREADS", os.cpu_count() or 1)))
+
+
+class TransducerAdapter(ASRAdapter):
+    """Parakeet TDT (NeMo transducer) via sherpa-onnx. Timestamp per token -> per parola."""
     word_timestamps = True
 
     def __init__(self, mid):
+        super().__init__()
         self.mid = mid
 
     def load(self, device):
-        import onnx_asr
-        prov = ["CUDAExecutionProvider", "CPUExecutionProvider"] if device == "cuda" else ["CPUExecutionProvider"]
-        m = onnx_asr.load_model(registry.MODELS[self.mid]["onnx_name"], registry.model_dir(self.mid),
-                                quantization="int8", providers=prov)
-        self.model = m.with_timestamps()
+        import sherpa_onnx
+        d = registry.model_dir(self.mid)
+        self.rec = sherpa_onnx.OfflineRecognizer.from_transducer(
+            encoder=_find(d, "encoder*.onnx"), decoder=_find(d, "decoder*.onnx"), joiner=_find(d, "joiner*.onnx"),
+            tokens=str(d / "tokens.txt"), num_threads=_threads(), model_type="nemo_transducer",
+            provider="cuda" if device == "cuda" else "cpu")
 
     def transcribe(self, samples, language, prompt=None):
-        r = self.model.recognize(samples, sample_rate=16000)
+        with self.lock:
+            s = self.rec.create_stream()
+            s.accept_waveform(16000, samples)
+            self.rec.decode_stream(s)
+            r = s.result
         text = (r.text or "").strip()
         if not text:
             return []
-        words = tokens_to_words(r.tokens or [], r.timestamps or [])
         dur = len(samples) / 16000
-        if words:  # chiude l'ultima parola alla fine del segnale o a +0.4 s
-            for i, w in enumerate(words):
-                w["e"] = words[i + 1]["s"] if i + 1 < len(words) else min(dur, w["s"] + 0.4)
+        words = tokens_to_words(list(r.tokens), list(r.timestamps))
+        for i, w in enumerate(words):  # fine parola = inizio della successiva (o +0.4 s sull'ultima)
+            w["e"] = words[i + 1]["s"] if i + 1 < len(words) else min(dur, w["s"] + 0.4)
         return [{"start": words[0]["s"] if words else 0.0, "end": dur, "text": text, "words": words}]
 
     def unload(self):
-        self.model = None
+        self.rec = None
         gc.collect()
 
 
-def tokens_to_words(tokens, stamps):
-    """Raggruppa i token SentencePiece (inizio parola = '▁') in parole con il timestamp del primo token."""
-    words, cur, t0 = [], "", None
-    for tok, ts in zip(tokens, stamps):
-        if tok.startswith("▁") or cur == "":
-            if cur.strip():
-                words.append({"w": cur.strip(), "s": round(t0, 3), "e": round(t0, 3)})
-            cur, t0 = tok.replace("▁", ""), ts
-        else:
-            cur += tok
-    if cur.strip():
-        words.append({"w": cur.strip(), "s": round(t0, 3), "e": round(t0, 3)})
+class WhisperAdapter(ASRAdapter):
+    """Whisper (small/base/turbo/large-v3) via sherpa-onnx, con timestamp di segmento/token quando disponibili."""
+
+    def __init__(self, mid):
+        super().__init__()
+        self.mid = mid
+
+    def load(self, device):
+        import sherpa_onnx
+        d = registry.model_dir(self.mid)
+        self.d, self.device = d, device
+        self.recs = {}  # una istanza per lingua (la lingua è fissata alla creazione)
+
+    def _rec(self, lang):
+        import sherpa_onnx
+        if lang not in self.recs:
+            kw = dict(encoder=_find(self.d, "*encoder*.onnx"), decoder=_find(self.d, "*decoder*.onnx"),
+                      tokens=_find(self.d, "*tokens.txt"), language="" if lang == "auto" else lang, task="transcribe",
+                      num_threads=_threads(), provider="cuda" if self.device == "cuda" else "cpu")
+            try:
+                self.recs[lang] = sherpa_onnx.OfflineRecognizer.from_whisper(enable_token_timestamps=True, enable_segment_timestamps=True, **kw)
+                self.ts = True
+            except TypeError:
+                self.recs[lang] = sherpa_onnx.OfflineRecognizer.from_whisper(**kw)
+                self.ts = False
+        return self.recs[lang]
+
+    def transcribe(self, samples, language, prompt=None):
+        with self.lock:
+            rec = self._rec(language)
+            s = rec.create_stream()
+            s.accept_waveform(16000, samples)
+            rec.decode_stream(s)
+            r = s.result
+        text = (r.text or "").strip()
+        self.detected = getattr(r, "lang", None) or self.detected
+        if not text:
+            return []
+        dur = len(samples) / 16000
+        words = []
+        toks, stamps = list(getattr(r, "tokens", []) or []), list(getattr(r, "timestamps", []) or [])
+        if toks and len(toks) == len(stamps) and stamps:
+            words = _whisper_words(toks, stamps, dur)
+        return [{"start": words[0]["s"] if words else 0.0, "end": dur, "text": text, "words": words}]
+
+    def unload(self):
+        self.recs = {}
+        gc.collect()
+
+
+def _whisper_words(tokens, stamps, dur):
+    words = tokens_to_words(tokens, stamps)
+    for i, w in enumerate(words):
+        w["e"] = words[i + 1]["s"] if i + 1 < len(words) else min(dur, w["s"] + 0.4)
     return words
 
 
-class VoxtralAdapter(ASRAdapter):
-    """SPERIMENTALE e non verificata. Usa transformers; richiede GPU e `pip install -r requirements-voxtral.txt`."""
-
-    def load(self, device):
-        try:
-            import torch
-            from transformers import AutoProcessor, VoxtralForConditionalGeneration  # noqa
-        except ImportError as e:
-            raise RuntimeError("Dipendenze Voxtral mancanti (pip install -r requirements-voxtral.txt): %s" % e)
-        path = str(registry.model_dir("voxtral-mini-4b-realtime"))
-        self.torch = torch
-        self.device = device
-        self.processor = AutoProcessor.from_pretrained(path)
-        self.model = VoxtralForConditionalGeneration.from_pretrained(path, torch_dtype=torch.bfloat16).to(device)
-
-    def transcribe(self, samples, language, prompt=None):
-        inputs = self.processor.apply_transcription_request(
-            language=language if language != "auto" else "en", audio=samples, format=["WAV"],
-            model_id=str(registry.model_dir("voxtral-mini-4b-realtime")))
-        inputs = inputs.to(self.device, dtype=self.torch.bfloat16)
-        with self.torch.no_grad():
-            out = self.model.generate(**inputs, max_new_tokens=1024, do_sample=False)
-        text = self.processor.batch_decode(out[:, inputs.input_ids.shape[1]:], skip_special_tokens=True)[0].strip()
-        return [{"start": 0.0, "end": len(samples) / 16000, "text": text, "words": []}] if text else []
-
-    def unload(self):
-        self.model = self.processor = None
-        gc.collect()
-        try:
-            self.torch.cuda.empty_cache()
-        except Exception:
-            pass
+def tokens_to_words(tokens, stamps):
+    """Raggruppa i token BPE in parole col tempo del primo token. L'inizio-parola è marcato da '▁' (SentencePiece)
+    oppure da uno spazio iniziale (come restituisce sherpa-onnx: ' par', 'ler', 'emo')."""
+    words, cur, t0 = [], "", None
+    for tok, ts in zip(tokens, stamps):
+        starts = tok[:1] in (" ", "▁")
+        if (starts or cur == "") and cur.strip():
+            words.append({"w": cur.strip(), "s": round(t0, 3), "e": round(t0, 3)})
+            cur = ""
+        if cur == "":
+            t0 = ts
+        cur += tok.replace("▁", " ") if cur == "" else tok
+    if cur.strip():
+        words.append({"w": cur.strip(), "s": round(t0, 3), "e": round(t0, 3)})
+    return words
 
 
 class MockAdapter(ASRAdapter):
@@ -125,29 +152,24 @@ class MockAdapter(ASRAdapter):
     word_timestamps = True
 
     def __init__(self, variant=False):
+        super().__init__()
         self.variant = variant  # "mock2": diverge in alcune parole, per testare il confronto
 
     def load(self, device):
         pass
 
     def transcribe(self, samples, language, prompt=None):
-        import os, time
+        import time
         time.sleep(float(os.environ.get("STUDIO_MOCK_DELAY", "0")))
-        self.calls = getattr(self, "calls", 0) + 1
         d = len(samples) / 16000
         n = max(3, int(d // 2))
-        words = [{"w": f"parola{i}" if not (self.variant and i % 4 == 3) else f"parolina{i}", "s": round(i * d / n, 3), "e": round((i + 1) * d / n, 3)} for i in range(n)]
+        words = [{"w": f"parola{i}" if not (self.variant and i % 4 == 3) else f"parolina{i}", "s": round(i * d / n, 3),
+                  "e": round((i + 1) * d / n, 3)} for i in range(n)]
         return [{"start": 0.0, "end": round(d, 3), "text": " ".join(w["w"] for w in words), "words": words}]
 
 
 def create(mid):
     if mid.startswith("mock"):
         return MockAdapter(variant=mid == "mock2")
-    fam = registry.MODELS[mid]["family"]
-    if fam == "whisper":
-        return WhisperAdapter()
-    if fam == "parakeet":
-        return ParakeetAdapter(mid)
-    if fam == "voxtral":
-        return VoxtralAdapter()
-    raise KeyError(mid)
+    kind = registry.MODELS[mid]["kind"]
+    return TransducerAdapter(mid) if kind == "transducer" else WhisperAdapter(mid)

@@ -149,6 +149,17 @@ def plan_chunks(db: np.ndarray, max_len: float = 28.0, min_len: float = 8.0, min
     return chunks
 
 
+def plan_in_ranges(db: np.ndarray, ranges, max_len: float = 28.0):
+    """Pianifica i chunk dentro intervalli di parlante già noti [(s,e,spk)]: ogni chunk ha un solo parlante.
+    Ritorna [(a,b,spk)] in ordine temporale."""
+    out = []
+    for s, e, spk in ranges:
+        i0, i1 = int(s / FRAME), int(e / FRAME)
+        for a, b in plan_chunks(db[i0:i1], max_len=max_len):
+            out.append((round(s + a, 3), round(s + b, 3), spk))
+    return sorted(out)
+
+
 def waveform_peaks(pcm: np.memmap, bins: int = 1600):
     n = len(pcm)
     if n == 0:

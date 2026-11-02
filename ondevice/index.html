@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="it"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Trascrizione sul dispositivo</title>
+<link rel="manifest" href="manifest.json"><link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="theme-color" content="#0f172a">
+<style>
+:root{--bg:#0f172a;--card:#1e293b;--fg:#e5e7eb;--mut:#94a3b8;--acc:#38bdf8;--bad:#f87171;--ok:#4ade80}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.5 -apple-system,system-ui,sans-serif;padding:env(safe-area-inset-top) 16px 40px}
+main{max-width:760px;margin:0 auto}h1{font-size:22px;margin:18px 0 4px}h2{font-size:18px}
+.card{background:var(--card);border-radius:14px;padding:14px;margin:12px 0}
+button,select{font:inherit;min-height:44px;border-radius:10px;border:1px solid #475569;background:#334155;color:var(--fg);padding:8px 14px;margin:3px}
+button.primary{background:var(--acc);color:#082f49;border:0;font-weight:600}button.danger{background:#7f1d1d;border:0}
+.mut{color:var(--mut);font-size:14px}.bad{color:var(--bad)}.ok{color:var(--ok)}
+.row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.grow{flex:1}
+.seg{margin:6px 0}.seg .t{color:var(--mut);font-size:13px;margin-right:6px}
+.big{font-size:22px;min-height:200px;white-space:pre-wrap}
+.bar{height:10px;background:#334155;border-radius:6px;overflow:hidden}.bar>i{display:block;height:100%;background:var(--acc);width:0}
+input[type=text]{font:inherit;min-height:44px;border-radius:10px;border:1px solid #475569;background:#0f172a;color:var(--fg);padding:6px 10px;width:100%}
+</style></head><body><main id="app"></main>
+<script type="module" src="app.js"></script></body></html>

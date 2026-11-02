@@ -11,7 +11,8 @@ ROUTES.push([/^#\/t\/(\w+)$/, async id => {
   const [sys, fl] = await Promise.all([api("/api/system"), api("/api/folders")]); LIB.folders = fl.folders;
   const segs = t.segments, orig = t.orig_segments || t.segments; let ann = t.notes || [];
   const st = t.stats || {}; const speakers = st.speakers || null, teacher = st.teacher || null, multiSpk = speakers && Object.keys(speakers).length > 1;
-  const S = { listen: LS.get("ed_listen", "1") === "1", showOthers: !multiSpk, follow: true, mode: "fedele" };
+  const hasOff = segs.some(s => s.off_topic);
+  const S = { listen: LS.get("ed_listen", "1") === "1", showOthers: !(multiSpk || hasOff), follow: true, mode: "fedele" };
 
   /* ---------- tempi delle parole: reali se disponibili e coerenti, altrimenti stimati in proporzione ai caratteri ---------- */
   const wcache = new Map();
@@ -60,7 +61,7 @@ ROUTES.push([/^#\/t\/(\w+)$/, async id => {
 
   /* ---------- segmenti ---------- */
   const spkLabel = s => speakers && s.speaker && speakers[s.speaker] ? speakers[s.speaker].label : null;
-  const isOther = s => multiSpk && teacher && s.speaker && s.speaker !== teacher;
+  const isOther = s => !!s.off_topic || (multiSpk && teacher && s.speaker && s.speaker !== teacher);
   function renderText(i) {
     const s = segs[i], r = rows[i], el = r.txt;
     if (S.listen) {
@@ -73,7 +74,8 @@ ROUTES.push([/^#\/t\/(\w+)$/, async id => {
   function paintSeg(i) {
     const r = rows[i], s = segs[i]; r.row.classList.toggle("hl", hlOverlap(s).length > 0);
     r.row.classList.toggle("hidden", !S.showOthers && isOther(s)); r.row.classList.toggle("other", isOther(s));
-    r.spk.replaceChildren(spkLabel(s) && (multiSpk) ? h("button", { class: "spk" + (isOther(s) ? " other" : ""), title: "Cambia parlante", onclick: () => reassign(i) }, spkLabel(s)) : null);
+    r.spk.replaceChildren(s.off_topic ? h("button", { class: "spk other", title: "Riporta questa parte nella lezione", onclick: async () => { await api(`/api/transcripts/${id}/off-topic`, { json: { edits: [i], off_topic: [] } }); delete s.off_topic; paintSeg(i); toast("Riportata nella lezione"); } }, "fuori tema ↺")
+      : spkLabel(s) && multiSpk ? h("button", { class: "spk" + (isOther(s) ? " other" : ""), title: "Cambia parlante", onclick: () => reassign(i) }, spkLabel(s)) : null);
     r.notes.replaceChildren(notesOf(i).map(a => h("button", { class: "notechip", title: "Modifica o elimina la nota", onclick: () => editNote(a, i) }, "✎ " + a.text)));
     r.star.classList.toggle("on", hlOverlap(s).length > 0);
   }
@@ -208,10 +210,12 @@ ROUTES.push([/^#\/t\/(\w+)$/, async id => {
     h("p", { class: "m" }, "L'insegnante è presunto il parlante con più parlato: se è sbagliato, cambialo qui. Le altre voci sono nascoste e escluse da copia/PDF a meno che tu non le mostri."),
     Object.entries(speakers).map(([k, v]) => h("div", { class: "row", style: "margin:6px 0" }, h("input", { type: "text", value: v.label, style: "max-width:180px", onchange: async e => { await api(`/api/transcripts/${id}/speakers`, { method: "PATCH", json: { id: k, label: e.target.value } }); toast("Salvato"); route(); } }),
       h("label", { class: "opt" }, h("input", { type: "radio", name: "tch", checked: v.teacher, onchange: async () => { await api(`/api/transcripts/${id}/speakers`, { method: "PATCH", json: { id: k, teacher: true } }); route(); } }), "è l'insegnante"), h("span", { class: "m" }, fmtT(v.seconds) + " di parlato")))) : null;
-  const othersCb = multiSpk ? h("label", { class: "opt" }, h("input", { type: "checkbox", onchange: e => { S.showOthers = e.target.checked; rows.forEach((_, i) => paintSeg(i)); doSearch(search.value); if (S.mode !== "fedele") setMode(S.mode); } }), "Mostra anche le altre voci") : null;
+  const othersCb = (multiSpk || hasOff) ? h("label", { class: "opt" }, h("input", { type: "checkbox", onchange: e => { S.showOthers = e.target.checked; rows.forEach((_, i) => paintSeg(i)); doSearch(search.value); if (S.mode !== "fedele") setMode(S.mode); } }), "Mostra anche le altre voci e le parti fuori tema") : null;
 
   const recomp = h("select", { "aria-label": "Ritrascrivi con" }); api("/api/models?language=" + (t.language === "auto" ? "it" : t.language)).then(r => { [...r.models, ...r.fast].filter(m => m.compatible && m.installed).forEach(m => recomp.append(h("option", { value: m.id }, m.name))); });
   const live = t.kind === "live";
+  const aiHost = h("div", { style: "margin-bottom:10px" });
+  buildAIPanel({ id, t, seekTo, reload: () => route() }).then(p => aiHost.replaceChildren(p)).catch(() => {});
 
   $app.replaceChildren(
     h("div", { class: "row sp" }, title, h("div", { class: "row" },
@@ -223,7 +227,7 @@ ROUTES.push([/^#\/t\/(\w+)$/, async id => {
     live && h("div", { class: "notice", style: "margin-top:10px" }, "Trascritta in diretta con un modello veloce? Ritrascrivi lo stesso audio con uno più accurato: ", recomp, h("button", { class: "small", onclick: async () => { try { const r = await api(`/api/transcripts/${id}/retranscribe`, { json: { model_id: recomp.value } }); location.hash = "#/t/" + r.id; } catch (e) { toast(e.message, 6000); } } }, "Ritrascrivi")),
     h("div", { class: "editor", style: "margin-top:16px" },
       h("div", { class: "player card" }, audioEl, canvas, seek, timeLbl, speeds, h("label", { class: "opt" }, followCb, "Segui la riproduzione"), h("div", { class: "m" }, "Barra spaziatrice: play/pausa · ←/→: ±5 s")),
-      h("div", null, h("div", { class: "notice", style: "margin-bottom:10px" }, precision), spkPanel, sugBox,
+      h("div", null, h("div", { class: "notice", style: "margin-bottom:10px" }, precision), spkPanel, sugBox, aiHost,
         h("div", { class: "row sp", style: "margin:12px 0" }, h("div", { class: "row" }, tabs, viewBar), h("div", { class: "row" }, search, count, saveState)), othersCb, body, werBox)));
   body.replaceChildren(list); applyView(); drawWave();
   if (live && st.recovered) toast("Registrazione recuperata dopo un'interruzione.", 6000);

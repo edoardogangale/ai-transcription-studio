@@ -23,12 +23,14 @@ CREATE TABLE IF NOT EXISTS folders(id TEXT PRIMARY KEY, name TEXT NOT NULL, pare
 CREATE TABLE IF NOT EXISTS notes(id TEXT PRIMARY KEY, tid TEXT NOT NULL, kind TEXT NOT NULL, t0 REAL NOT NULL, t1 REAL, text TEXT, created REAL);
 CREATE INDEX IF NOT EXISTS ix_notes_tid ON notes(tid);
 CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(tid UNINDEXED, title, body, tokenize='unicode61 remove_diacritics 2');
-CREATE TABLE IF NOT EXISTS vocab(id INTEGER PRIMARY KEY AUTOINCREMENT, term TEXT, context TEXT, UNIQUE(term, context));
+CREATE TABLE IF NOT EXISTS vocab2(id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT, term TEXT, context TEXT, UNIQUE(owner, term, context));
+CREATE TABLE IF NOT EXISTS corrections(id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT, scope TEXT, wrong TEXT, right TEXT, n INTEGER DEFAULT 1, UNIQUE(owner, scope, wrong, right));
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
 """
 
 JSON_COLS = {"options", "partial", "segments", "orig_segments", "stats", "prefs"}
-MIGRATIONS = [("transcripts", "folder_id", "TEXT"), ("transcripts", "kind", "TEXT DEFAULT 'file'")]
+MIGRATIONS = [("transcripts", "folder_id", "TEXT"), ("transcripts", "kind", "TEXT DEFAULT 'file'"),
+              ("transcripts", "owner", "TEXT"), ("folders", "owner", "TEXT")]
 
 
 def conn() -> sqlite3.Connection:
@@ -42,6 +44,11 @@ def conn() -> sqlite3.Connection:
         for table, col, typ in MIGRATIONS:  # migrazione non distruttiva di database creati da versioni precedenti
             if col not in [r[1] for r in c.execute(f"PRAGMA table_info({table})")]:
                 c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+        c.execute("UPDATE transcripts SET owner='admin' WHERE owner IS NULL")   # dati di versioni precedenti: all'amministratore
+        c.execute("UPDATE folders SET owner='admin' WHERE owner IS NULL")
+        if c.execute("SELECT name FROM sqlite_master WHERE name='vocab'").fetchone():   # vocabolario di versioni precedenti
+            c.execute("INSERT OR IGNORE INTO vocab2(owner,term,context) SELECT 'admin',term,context FROM vocab")
+            c.execute("DROP TABLE vocab")
         c.commit()
         _local.c, _local.path = c, str(config.DB_PATH)
     return c
@@ -91,12 +98,17 @@ LIST_COLS = ("id,title,filename,duration,language,model_id,context,status,error,
              "chunks_total,chunks_done,has_word_ts,stats,created,updated")
 
 
-def list_all(status=None):
+def list_all(status=None, owner=None):
     q = f"SELECT {LIST_COLS} FROM transcripts"
-    args = []
+    where, args = [], []
     if status:
-        q += " WHERE status=?"
+        where.append("status=?")
         args.append(status)
+    if owner:
+        where.append("owner=?")
+        args.append(owner)
+    if where:
+        q += " WHERE " + " AND ".join(where)
     q += " ORDER BY created DESC"
     return [_row(r) for r in conn().execute(q, args).fetchall()]
 
@@ -117,19 +129,20 @@ def index_text(tid: str, title: str, body: str) -> None:
     c.commit()
 
 
-def search(q: str, limit: int = 50):
+def search(q: str, limit: int = 50, owner=None):
     terms = [t for t in "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in q).split() if t]
     if not terms:
         return []
     match = " ".join(f'"{t}"*' for t in terms)
-    rows = conn().execute("SELECT tid, snippet(fts,2,'<mark>','</mark>','…',14) AS snip FROM fts WHERE fts MATCH ? ORDER BY rank LIMIT ?",
-                          (match, limit)).fetchall()
+    own = " AND tid IN (SELECT id FROM transcripts WHERE owner=?)" if owner else ""
+    rows = conn().execute(f"SELECT tid, snippet(fts,2,'<mark>','</mark>','…',14) AS snip FROM fts WHERE fts MATCH ?{own} ORDER BY rank LIMIT ?",
+                          ((match, owner, limit) if owner else (match, limit))).fetchall()
     return [{"id": r["tid"], "snippet": r["snip"]} for r in rows]
 
 
 # ---- cartelle (materie > argomenti) ----
-def folder_list():
-    rows = [_row(r) for r in conn().execute("SELECT * FROM folders ORDER BY name COLLATE NOCASE").fetchall()]
+def folder_list(owner=None):
+    rows = [_row(r) for r in conn().execute("SELECT * FROM folders" + (" WHERE owner=?" if owner else "") + " ORDER BY name COLLATE NOCASE", ((owner,) if owner else ())).fetchall()]
     counts = {r[0]: r[1] for r in conn().execute("SELECT folder_id, COUNT(*) FROM transcripts WHERE folder_id IS NOT NULL GROUP BY folder_id")}
     for r in rows:
         r["count"] = counts.get(r["id"], 0)
@@ -140,11 +153,11 @@ def folder_get(fid):
     return _row(conn().execute("SELECT * FROM folders WHERE id=?", (fid,)).fetchone())
 
 
-def folder_add(name, parent_id=None, prefs=None):
+def folder_add(name, parent_id=None, prefs=None, owner="admin"):
     fid = new_id()
     c = conn()
-    c.execute("INSERT INTO folders(id,name,parent_id,prefs,created) VALUES(?,?,?,?,?)",
-              (fid, name.strip()[:80], parent_id, json.dumps(prefs or {}), time.time()))
+    c.execute("INSERT INTO folders(id,name,parent_id,prefs,created,owner) VALUES(?,?,?,?,?,?)",
+              (fid, name.strip()[:80], parent_id, json.dumps(prefs or {}), time.time(), owner))
     c.commit()
     return fid
 
@@ -220,9 +233,9 @@ def measured_rtf():
     return {k: round(statistics.median(v), 3) for k, v in by.items()}
 
 
-def find_dedupe(key: str):
+def find_dedupe(key: str, owner=None):
     return _row(conn().execute(
-        "SELECT * FROM transcripts WHERE dedupe_key=? AND status IN ('queued','running','done') LIMIT 1", (key,)).fetchone())
+        "SELECT * FROM transcripts WHERE dedupe_key=? AND owner=? AND status IN ('queued','running','done') LIMIT 1", (key, owner)).fetchone())
 
 
 def uses_upload(upload_id: str) -> int:
@@ -241,17 +254,60 @@ def setting_set(key, value) -> None:
     c.commit()
 
 
-def vocab_list():
-    return [dict(r) for r in conn().execute("SELECT id,term,context FROM vocab ORDER BY term").fetchall()]
+def vocab_list(owner="admin"):
+    return [dict(r) for r in conn().execute("SELECT id,term,context FROM vocab2 WHERE owner=? ORDER BY term", (owner,)).fetchall()]
 
 
-def vocab_add(term: str, context: str) -> None:
+def vocab_add(term: str, context: str, owner="admin") -> None:
     c = conn()
-    c.execute("INSERT OR IGNORE INTO vocab(term,context) VALUES(?,?)", (term.strip(), context))
+    c.execute("INSERT OR IGNORE INTO vocab2(owner,term,context) VALUES(?,?,?)", (owner, term.strip(), context))
     c.commit()
 
 
-def vocab_del(vid: int) -> None:
+def vocab_del(vid: int, owner="admin") -> None:
     c = conn()
-    c.execute("DELETE FROM vocab WHERE id=?", (vid,))
+    c.execute("DELETE FROM vocab2 WHERE id=? AND owner=?", (vid, owner))
     c.commit()
+
+
+# ---- memoria delle correzioni approvate dall'utente (per materia/contesto) ----
+def corr_add(owner, scope, wrong, right):
+    c = conn()
+    c.execute("INSERT INTO corrections(owner,scope,wrong,right,n) VALUES(?,?,?,?,1) ON CONFLICT(owner,scope,wrong,right) DO UPDATE SET n=n+1",
+              (owner, scope, wrong, right))
+    c.commit()
+
+
+def corr_list(owner, scope=None):
+    q, a = "SELECT id,scope,wrong,right,n FROM corrections WHERE owner=?", [owner]
+    if scope:
+        q += " AND scope=?"
+        a.append(scope)
+    return [dict(r) for r in conn().execute(q + " ORDER BY n DESC, id DESC", a).fetchall()]
+
+
+def corr_del(owner, cid):
+    c = conn()
+    c.execute("DELETE FROM corrections WHERE id=? AND owner=?", (cid, owner))
+    c.commit()
+
+
+def note_tid(nid):
+    r = conn().execute("SELECT tid FROM notes WHERE id=?", (nid,)).fetchone()
+    return r[0] if r else None
+
+
+def purge_owner(owner):
+    """Elimina DEFINITIVAMENTE i dati di un profilo. Ritorna gli upload_id da cancellare dal disco."""
+    c = conn()
+    ids = [r[0] for r in c.execute("SELECT id FROM transcripts WHERE owner=?", (owner,))]
+    ups = [r[0] for r in c.execute("SELECT DISTINCT upload_id FROM transcripts WHERE owner=?", (owner,)) if r[0]]
+    for tid in ids:
+        c.execute("DELETE FROM notes WHERE tid=?", (tid,))
+        c.execute("DELETE FROM fts WHERE tid=?", (tid,))
+    c.execute("DELETE FROM transcripts WHERE owner=?", (owner,))
+    c.execute("DELETE FROM folders WHERE owner=?", (owner,))
+    c.execute("DELETE FROM vocab2 WHERE owner=?", (owner,))
+    c.execute("DELETE FROM corrections WHERE owner=?", (owner,))
+    c.commit()
+    return ups

@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import audio, auth, config, db, diarization, engine, exports, hardware, installer, live, postprocess, registry, vocab
+from . import audio, auth, config, db, diarization, engine, exports, hardware, installer, live, llm, postprocess, registry, vocab
 from .textutil import diff_summary, full_text, wer, word_diff
 
 
@@ -40,8 +40,10 @@ async def guard(request: Request, call_next):
     p = request.url.path
     if p.startswith("/api/") and p != "/api/health":
         tok = request.headers.get("x-studio-token") or request.query_params.get("token")
-        if not auth.valid(tok):
-            return JSONResponse({"detail": "Token di accesso mancante o errato."}, status_code=401)
+        user = auth.resolve(tok)
+        if not user:
+            return JSONResponse({"detail": "Codice di accesso mancante o errato."}, status_code=401)
+        auth.current.set(user)
     return await call_next(request)
 
 
@@ -49,9 +51,31 @@ def err(code, msg):
     raise HTTPException(code, msg)
 
 
+def me():
+    u = auth.current.get()
+    return u["id"] if u else auth.ADMIN_ID
+
+
+def admin_only():
+    u = auth.current.get()
+    if not (u and u["admin"]):
+        err(403, "Solo l'amministratore può farlo.")
+
+
+def _own(t):
+    return t is not None and (t.get("owner") or auth.ADMIN_ID) == me()
+
+
+def _fo(fid):
+    f = db.folder_get(fid)
+    if not f or (f.get("owner") or auth.ADMIN_ID) != me():
+        err(404, "Cartella non trovata.")
+    return f
+
+
 def _t(tid, need_segments=False):
     t = db.get(tid)
-    if not t:
+    if not _own(t):
         err(404, "Non trovata.")
     if need_segments and not t["segments"]:
         err(404, "Non trovata o non completata.")
@@ -64,6 +88,21 @@ def health():
     return {"ok": True, "auth_required": bool(config.ACCESS_TOKEN)}
 
 
+def _persistence():
+    """Dove stanno i modelli e se resteranno: l'utente deve scaricarli UNA volta sola."""
+    import os
+    d = str(config.DATA_DIR)
+    if os.environ.get("CODESPACES") == "true":
+        return {"ok": True, "text": f"Sei su GitHub Codespaces: modelli e archivio restano salvati in {d} finché non elimini il Codespace (quando si ferma per inattività i file restano)."}
+    if os.path.exists("/.dockerenv"):
+        try:
+            if os.stat(config.DATA_DIR).st_dev == os.stat("/").st_dev:
+                return {"ok": False, "text": f"Attenzione: sei in Docker ma {d} non è un volume: ricreando il container i modelli andrebbero riscaricati. Usa docker-compose.yml (volume studio-data)."}
+        except OSError:
+            pass
+    return {"ok": True, "text": f"I modelli restano salvati in {d}: si scaricano una volta sola, anche se aggiorni il progetto."}
+
+
 @app.get("/api/system")
 def system():
     ok_d, why_d = diarization.available()
@@ -73,7 +112,9 @@ def system():
             "websocket": bool(importlib.util.find_spec("websockets") or importlib.util.find_spec("wsproto")),
             "settings": {"device": db.setting_get("device", "auto"), "parallel": engine.parallel_limit(),
                          "diar_threshold": db.setting_get("diar_threshold", 0.5), "mock": config.ENABLE_MOCK},
-            "data_dir": str(config.DATA_DIR), "disk_free_gb": round(shutil.disk_usage(config.DATA_DIR).free / 1e9, 1)}
+            "data_dir": str(config.DATA_DIR), "disk_free_gb": round(shutil.disk_usage(config.DATA_DIR).free / 1e9, 1),
+            "persistence": _persistence(),
+            "me": {**(auth.current.get() or {"id": "admin", "name": "Locale", "admin": True})}, "multiuser": auth.protected()}
 
 
 class SettingsIn(BaseModel):
@@ -84,6 +125,7 @@ class SettingsIn(BaseModel):
 
 @app.put("/api/settings")
 def put_settings(s: SettingsIn):
+    admin_only()
     if s.device is not None:
         if s.device not in ("auto", "cpu", "cuda"):
             err(400, "Dispositivo non valido.")
@@ -102,10 +144,12 @@ def put_settings(s: SettingsIn):
 @app.get("/api/activity")
 def activity():
     """Tutto ciò che sta lavorando in background (per il centro attività e le notifiche)."""
-    jobs = [j for j in db.list_all() if j["status"] in ("queued", "running", "recording")]
+    jobs = [j for j in db.list_all(owner=me()) if j["status"] in ("queued", "running", "recording")]
     dl = {k: v for k, v in installer._state.items() if v.get("state") in ("starting", "downloading", "extracting")}
-    return {"jobs": jobs, "downloads": dl, "parallel": engine.parallel_limit(),
-            "live": [{"id": s.tid, **s.status_msg()} for s in live.sessions.values()]}
+    mine = {j["id"] for j in jobs}
+    ai = {m: v for m, v in llm.PULL.items() if v.get("state") in ("starting", "downloading")}
+    return {"jobs": jobs, "downloads": dl | {"ai:" + k: v | {"state": "downloading"} for k, v in ai.items()}, "parallel": engine.parallel_limit(),
+            "live": [{"id": s.tid, **s.status_msg()} for s in live.sessions.values() if s.tid in mine]}
 
 
 # ---------------------------------------------------------------- modelli
@@ -132,6 +176,7 @@ def models_all():
 
 @app.post("/api/models/{mid}/install")
 def install(mid: str):
+    admin_only()
     if mid not in registry.ALL:
         err(404, "Modello sconosciuto.")
     installer.start(mid)  # solo su richiesta esplicita dell'utente
@@ -140,6 +185,7 @@ def install(mid: str):
 
 @app.post("/api/models/{mid}/cancel")
 def install_cancel(mid: str):
+    admin_only()
     installer.cancel(mid)
     return {"ok": True}
 
@@ -153,6 +199,7 @@ def install_status(mid: str):
 
 @app.delete("/api/models/{mid}")
 def delete_model(mid: str):
+    admin_only()
     if mid not in registry.ALL:
         err(404, "Modello sconosciuto.")
     try:
@@ -170,7 +217,7 @@ class VocabIn(BaseModel):
 
 @app.get("/api/vocab")
 def vocab_get():
-    return {"custom": db.vocab_list(), "builtin": vocab.BUILTIN, "contexts": vocab.CONTEXTS}
+    return {"custom": db.vocab_list(me()), "builtin": vocab.BUILTIN, "contexts": vocab.CONTEXTS}
 
 
 @app.post("/api/vocab")
@@ -179,13 +226,13 @@ def vocab_post(v: VocabIn):
         err(400, "Termine vuoto.")
     if v.context != "*" and v.context not in vocab.CONTEXTS:
         err(400, "Contesto non valido.")
-    db.vocab_add(v.term, v.context)
+    db.vocab_add(v.term, v.context, me())
     return {"ok": True}
 
 
 @app.delete("/api/vocab/{vid}")
 def vocab_delete(vid: int):
-    db.vocab_del(vid)
+    db.vocab_del(vid, me())
     return {"ok": True}
 
 
@@ -217,30 +264,30 @@ def _folder_path(fid):
 
 @app.get("/api/folders")
 def folders():
-    return {"folders": db.folder_list(), "unfiled": db.conn().execute("SELECT COUNT(*) FROM transcripts WHERE folder_id IS NULL AND kind!='probe'").fetchone()[0]}
+    return {"folders": db.folder_list(me()), "unfiled": db.conn().execute("SELECT COUNT(*) FROM transcripts WHERE folder_id IS NULL AND owner=?", (me(),)).fetchone()[0]}
 
 
 @app.post("/api/folders")
 def folder_new(f: FolderIn):
     if not f.name.strip():
         err(400, "Nome vuoto.")
-    if f.parent_id and not db.folder_get(f.parent_id):
-        err(404, "Cartella superiore non trovata.")
-    return {"id": db.folder_add(f.name, f.parent_id, f.prefs)}
+    if f.parent_id:
+        _fo(f.parent_id)
+    return {"id": db.folder_add(f.name, f.parent_id, f.prefs, me())}
 
 
 @app.patch("/api/folders/{fid}")
 def folder_patch(fid: str, p: FolderPatch):
-    cur = db.folder_get(fid)
-    if not cur:
-        err(404, "Cartella non trovata.")
+    cur = _fo(fid)
     fields = {}
     if p.name is not None:
         if not p.name.strip():
             err(400, "Nome vuoto.")
         fields["name"] = p.name.strip()[:80]
     if p.move:
-        if p.parent_id and (p.parent_id in db.folder_descendants(fid) or not db.folder_get(p.parent_id)):
+        if p.parent_id:
+            _fo(p.parent_id)
+        if p.parent_id and p.parent_id in db.folder_descendants(fid):
             err(400, "Spostamento non valido (una cartella non può stare dentro sé stessa).")
         fields["parent_id"] = p.parent_id
     if p.prefs is not None:
@@ -252,8 +299,7 @@ def folder_patch(fid: str, p: FolderPatch):
 
 @app.delete("/api/folders/{fid}")
 def folder_del(fid: str):
-    if not db.folder_get(fid):
-        err(404, "Cartella non trovata.")
+    _fo(fid)
     db.folder_delete(fid)  # le trascrizioni NON vengono eliminate: salgono alla cartella superiore
     return {"ok": True}
 
@@ -265,10 +311,11 @@ class MoveIn(BaseModel):
 
 @app.post("/api/transcripts/move")
 def move(m: MoveIn):
-    if m.folder_id and not db.folder_get(m.folder_id):
-        err(404, "Cartella non trovata.")
-    db.move_to_folder(m.ids, m.folder_id)
-    return {"ok": True, "moved": len(m.ids)}
+    if m.folder_id:
+        _fo(m.folder_id)
+    ids = [i for i in m.ids if _own(db.get(i))]
+    db.move_to_folder(ids, m.folder_id)
+    return {"ok": True, "moved": len(ids)}
 
 
 # ---------------------------------------------------------------- upload
@@ -290,7 +337,7 @@ async def upload(file: UploadFile = File(...)):
     except audio.AudioError as e:
         shutil.rmtree(d, ignore_errors=True)
         err(400, str(e))
-    meta = {"upload_id": uid, "name": file.filename, "size": size, "sha": h.hexdigest(), "path": str(dst), **info}
+    meta = {"upload_id": uid, "name": file.filename, "size": size, "sha": h.hexdigest(), "path": str(dst), "owner": me(), **info}
     (d / "meta.json").write_text(json.dumps(meta, ensure_ascii=False))
     return meta
 
@@ -299,7 +346,10 @@ def _upload(uid):
     p = config.UPLOADS / uid / "meta.json"
     if not p.exists():
         err(404, "Upload non trovato.")
-    return json.loads(p.read_text())
+    m = json.loads(p.read_text())
+    if (m.get("owner") or auth.ADMIN_ID) != me():
+        err(404, "Upload non trovato.")
+    return m
 
 
 # ---------------------------------------------------------------- creazione lavori
@@ -334,8 +384,8 @@ def _validate(j: JobIn):
         err(400, "Contesto non valido.")
     if (j.diarize or j.teacher_only) and not diarization.available()[0]:
         err(422, "Riconoscimento parlanti non disponibile: " + diarization.available()[1])
-    if j.folder_id and not db.folder_get(j.folder_id):
-        err(404, "Cartella non trovata.")
+    if j.folder_id:
+        _fo(j.folder_id)
 
 
 def _create(j: JobIn, group=None, dedupe=True):
@@ -345,7 +395,7 @@ def _create(j: JobIn, group=None, dedupe=True):
             "num_speakers": j.num_speakers, "mode": j.mode}
     key = "|".join(map(str, [m["sha"], j.model_id, j.language, j.context, j.normalize, j.denoise, diar, j.teacher_only, j.num_speakers]))
     if dedupe and not j.force:
-        ex = db.find_dedupe(key)
+        ex = db.find_dedupe(key, me())
         if ex:
             if ex["upload_id"] != j.upload_id and not db.uses_upload(j.upload_id):
                 shutil.rmtree(config.UPLOADS / j.upload_id, ignore_errors=True)  # niente file orfani
@@ -353,7 +403,7 @@ def _create(j: JobIn, group=None, dedupe=True):
     tid = db.insert(title=j.title or Path(m["name"] or "audio").stem, upload_id=j.upload_id, filename=m["name"],
                     audio_path=m["path"], audio_sha=m["sha"], duration=m["duration"], language=j.language,
                     model_id=j.model_id, context=j.context, options=opts, status="queued", kind="file",
-                    group_id=group, folder_id=j.folder_id, dedupe_key=key if dedupe else None)
+                    group_id=group, folder_id=j.folder_id, owner=me(), dedupe_key=key if dedupe else None)
     if j.folder_id:  # "memoria" della cartella: la prossima registrazione parte con le stesse scelte
         db.folder_update(j.folder_id, prefs={**(db.folder_get(j.folder_id)["prefs"] or {}), "language": j.language, "model_id": j.model_id,
                                               "context": j.context, "diarize": j.diarize, "teacher_only": j.teacher_only})
@@ -391,6 +441,7 @@ def compare(c: CompareIn):
 @app.get("/api/compare/{gid}")
 def compare_get(gid: str):
     items = [db.get(r["id"]) for r in db.conn().execute("SELECT id FROM transcripts WHERE group_id=? ORDER BY created", (gid,))]
+    items = [t for t in items if _own(t)]
     if not items:
         err(404, "Confronto non trovato.")
     done = [t for t in items if t["status"] == "done"]
@@ -411,7 +462,7 @@ def compare_get(gid: str):
 # ---------------------------------------------------------------- archivio / dettaglio
 @app.get("/api/transcripts")
 def list_t(status: str | None = None, folder_id: str | None = None, unfiled: bool = False, recursive: bool = True):
-    items = db.list_all(status)
+    items = db.list_all(status, owner=me())
     if unfiled:
         items = [t for t in items if not t["folder_id"]]
     elif folder_id:
@@ -423,7 +474,7 @@ def list_t(status: str | None = None, folder_id: str | None = None, unfiled: boo
 @app.get("/api/search")
 def search(q: str):
     """Ricerca nel testo di TUTTE le trascrizioni (e nei titoli): accenti e maiuscole ignorati, prefissi ammessi."""
-    hits = db.search(q)
+    hits = db.search(q, owner=me())
     out = []
     for h in hits:
         t = db.conn().execute("SELECT id,title,folder_id,duration,created,model_id FROM transcripts WHERE id=?", (h["id"],)).fetchone()
@@ -455,8 +506,8 @@ def patch_t(tid: str, p: PatchIn):
     if p.title is not None:
         fields["title"] = p.title.strip()[:200] or t["title"]
     if p.set_folder:
-        if p.folder_id and not db.folder_get(p.folder_id):
-            err(404, "Cartella non trovata.")
+        if p.folder_id:
+            _fo(p.folder_id)
         fields["folder_id"] = p.folder_id
     if p.edits:
         segs = t["segments"] or []
@@ -506,6 +557,7 @@ def speakers_patch(tid: str, s: SpeakerIn):
 
 @app.post("/api/transcripts/{tid}/cancel")
 def cancel_t(tid: str):
+    _t(tid)
     if not engine.cancel(tid):
         err(404, "Non trovata.")
     return {"ok": True}
@@ -514,7 +566,7 @@ def cancel_t(tid: str):
 @app.post("/api/transcripts/{tid}/retry")
 def retry_t(tid: str):
     t = db.get(tid)
-    if not t or t["status"] not in ("failed", "cancelled"):
+    if not _own(t) or t["status"] not in ("failed", "cancelled"):
         err(409, "Solo i lavori falliti o annullati possono essere ripresi.")
     db.update(tid, status="queued", error=None)  # riprende dai chunk già salvati
     engine.submit(tid)
@@ -566,7 +618,7 @@ def delete_many(b: IdsIn):
     n = 0
     for tid in b.ids:
         t = db.get(tid)
-        if t and t["status"] not in ("running", "recording"):
+        if _own(t) and t["status"] not in ("running", "recording"):
             _delete_one(t)
             n += 1
     return {"deleted": n}
@@ -600,7 +652,13 @@ def waveform(tid: str, bins: int = 1600):
 @app.get("/api/transcripts/{tid}/suggestions")
 def suggestions(tid: str):
     t = _t(tid, True)
-    return {"suggestions": vocab.suggestions(t["segments"], t["context"] or "Altro"),
+    sug = vocab.suggestions(t["segments"], t["context"] or "Altro", owner=me())
+    for m in db.corr_list(me(), t["context"] or "Altro"):      # correzioni già approvate in passato (memoria)
+        for i, s in enumerate(t["segments"]):
+            for w in s["text"].split():
+                if w.strip(".,;:!?") == m["wrong"]:
+                    sug.append({"seg": i, "word": w, "term": m["right"], "score": 1.0, "source": "memoria"})
+    return {"suggestions": sug,
             "note": "Proposte da confermare manualmente: nessuna parola viene sostituita automaticamente."}
 
 
@@ -651,6 +709,7 @@ class AnnPatch(BaseModel):
 
 @app.patch("/api/annotations/{nid}")
 def ann_patch(nid: str, a: AnnPatch):
+    _t(db.note_tid(nid) or "")
     f = {k: v for k, v in a.model_dump().items() if v is not None}
     if f:
         db.note_update(nid, **f)
@@ -659,6 +718,7 @@ def ann_patch(nid: str, a: AnnPatch):
 
 @app.delete("/api/annotations/{nid}")
 def ann_del(nid: str):
+    _t(db.note_tid(nid) or "")
     db.note_delete(nid)
     return {"ok": True}
 
@@ -681,7 +741,7 @@ def live_start(b: LiveIn):
     (config.UPLOADS / uid).mkdir(parents=True)
     title = b.title or "Lezione " + time.strftime("%d/%m/%Y %H:%M")
     tid = db.insert(title=title, upload_id=uid, filename=None, audio_path="", duration=0, language=b.language, model_id=b.model_id,
-                    context=b.context, options={"live": True}, status="recording", kind="live", folder_id=b.folder_id, segments=[])
+                    context=b.context, options={"live": True}, status="recording", kind="live", folder_id=b.folder_id, owner=me(), segments=[])
     s = live.LiveSession(tid, uid, b.model_id, device, b.language, b.context)
     try:
         s.start()
@@ -695,6 +755,7 @@ def live_start(b: LiveIn):
 
 @app.post("/api/live/{tid}/stop")
 async def live_stop(tid: str):
+    _t(tid)
     s = live.sessions.get(tid)
     if not s:
         t = _t(tid)
@@ -705,8 +766,13 @@ async def live_stop(tid: str):
 
 @app.websocket("/api/live/{tid}/ws")
 async def live_ws(ws: WebSocket, tid: str):
-    if not auth.valid(ws.query_params.get("token")):
+    user = auth.resolve(ws.query_params.get("token"))
+    if not user:
         await ws.close(code=4401)
+        return
+    auth.current.set(user)
+    if not _own(db.get(tid)):
+        await ws.close(code=4404)
         return
     s = live.sessions.get(tid)
     if not s:
@@ -815,7 +881,7 @@ def _items(ids, mode, teacher_only, with_notes):
     items = []
     for tid in ids:
         t = db.get(tid)
-        if not t or not t["segments"]:
+        if not _own(t) or not t["segments"]:
             continue
         items.append({"t": t, "notes": db.note_list(tid) if with_notes else [], "folder": _folder_path(t.get("folder_id")),
                       "paragraphs": None if mode == "fedele" else _render(t, mode, teacher_only)})
@@ -865,7 +931,7 @@ def export_audio_zip(ids: str):
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
         for tid in _ids(ids):
             t = db.get(tid)
-            if not t or not t["audio_path"] or not Path(t["audio_path"]).exists():
+            if not _own(t) or not t["audio_path"] or not Path(t["audio_path"]).exists():
                 continue
             p = Path(t["audio_path"])
             name, k = f"{_fname(t['title'])}{p.suffix}", 1
@@ -877,6 +943,176 @@ def export_audio_zip(ids: str):
     if not used:
         err(404, "Nessun audio disponibile.")
     return _download(buf.getvalue(), "application/zip", "Audio registrazioni.zip")
+
+
+# ---------------------------------------------------------------- profili (più persone, archivi separati)
+@app.get("/api/me")
+def whoami():
+    return {**auth.current.get(), "multiuser": auth.protected()}
+
+
+class UserIn(BaseModel):
+    name: str
+
+
+@app.get("/api/users")
+def users_list():
+    admin_only()
+    return {"users": auth.list_users(), "multiuser": auth.protected()}
+
+
+@app.post("/api/users")
+def users_new(u: UserIn):
+    admin_only()
+    if not auth.protected():
+        err(409, "I profili richiedono un codice di accesso: avvia l'app con --lan (o imposta STUDIO_TOKEN).")
+    if not u.name.strip():
+        err(400, "Nome vuoto.")
+    return auth.create_user(u.name)     # il codice viene mostrato UNA volta sola
+
+
+@app.post("/api/users/{uid}/reset")
+def users_reset(uid: str):
+    admin_only()
+    code = auth.reset_code(uid)
+    if not code:
+        err(404, "Profilo non trovato.")
+    return {"code": code}
+
+
+@app.delete("/api/users/{uid}")
+def users_del(uid: str, purge: bool = True):
+    admin_only()
+    if not auth.delete_user(uid):
+        err(404, "Profilo non trovato.")
+    if purge:      # elimina DEFINITIVAMENTE registrazioni, audio, cartelle e vocabolario di quella persona
+        for up in db.purge_owner(uid):
+            shutil.rmtree(config.UPLOADS / up, ignore_errors=True)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- correzione AI (opzionale)
+_ai_cancel: dict = {}
+
+
+@app.get("/api/ai/status")
+def ai_status():
+    st = llm.status(hardware.ram_gb())
+    st["install_hint"] = "Installa Ollama (gratuito, open source: ollama.com) sul computer che esegue l'app, poi torna qui."
+    return st
+
+
+class PullIn(BaseModel):
+    model: str
+
+
+@app.post("/api/ai/pull")
+def ai_pull(b: PullIn):
+    """Scarica il modello una volta sola: resta nell'archivio di Ollama (solo amministratore)."""
+    admin_only()
+    if llm.installed_models() is None:
+        err(409, "Ollama non è in esecuzione su questo computer.")
+    llm.pull(b.model)
+    return llm.PULL[b.model]
+
+
+@app.get("/api/transcripts/{tid}/ai-assessment")
+def ai_assessment(tid: str):
+    t = _t(tid, True)
+    return llm.assess(t, me())
+
+
+class ReviewIn(BaseModel):
+    model: str
+    scope: str = "flagged"           # "flagged" = solo i punti dubbi, "all" = tutto il testo
+    instructions: str = ""
+    off_topic: bool = True
+
+
+@app.post("/api/transcripts/{tid}/ai-review")
+def ai_review(tid: str, b: ReviewIn):
+    t = _t(tid, True)
+    if b.scope not in ("flagged", "all"):
+        err(400, "Ambito non valido.")
+    models = llm.installed_models()
+    if models is None:
+        err(409, "Ollama non è in esecuzione su questo computer: avvialo (vedi Impostazioni → Correzione AI).")
+    if b.model not in models:
+        err(409, f"Il modello {b.model} non è installato in Ollama.")
+    if ((t.get("stats") or {}).get("ai_review") or {}).get("status") == "running":
+        err(409, "Una revisione è già in corso.")
+    _ai_cancel[tid] = False
+    owner = me()
+    threading.Thread(target=lambda: llm.review(tid, b.model, b.scope, b.instructions, b.off_topic, owner, lambda: _ai_cancel.get(tid, False)), daemon=True, name="ai-review").start()
+    return {"started": True}
+
+
+@app.post("/api/transcripts/{tid}/ai-review/cancel")
+def ai_review_cancel(tid: str):
+    _t(tid)
+    _ai_cancel[tid] = True
+    return {"ok": True}
+
+
+class ApplyIn(BaseModel):
+    edits: list[int] = []
+    off_topic: list[int] = []
+
+
+@app.post("/api/transcripts/{tid}/ai-review/apply")
+def ai_apply(tid: str, b: ApplyIn):
+    _t(tid, True)
+    return llm.apply(tid, b.edits, b.off_topic, me())
+
+
+@app.post("/api/transcripts/{tid}/ai-review/discard")
+def ai_discard(tid: str):
+    t = _t(tid)
+    st = t.get("stats") or {}
+    st.pop("ai_review", None)
+    db.update(tid, stats=st)
+    return {"ok": True}
+
+
+@app.post("/api/transcripts/{tid}/off-topic")
+def set_off_topic(tid: str, b: ApplyIn):
+    """Segna/riporta parti come fuori tema (edits = indici da riportare in tema, off_topic = indici da escludere)."""
+    t = _t(tid, True)
+    segs = t["segments"]
+    for i in b.off_topic:
+        if 0 <= i < len(segs):
+            segs[i]["off_topic"] = True
+    for i in b.edits:
+        if 0 <= i < len(segs):
+            segs[i].pop("off_topic", None)
+    db.update(tid, segments=segs)
+    return {"ok": True}
+
+
+# memoria delle correzioni approvate
+class CorrIn(BaseModel):
+    scope: str = "Altro"
+    wrong: str
+    right: str
+
+
+@app.get("/api/corrections")
+def corr_get():
+    return {"corrections": db.corr_list(me())}
+
+
+@app.post("/api/corrections")
+def corr_post(c: CorrIn):
+    if not c.wrong.strip() or not c.right.strip() or c.wrong == c.right:
+        err(400, "Coppia non valida.")
+    db.corr_add(me(), c.scope, c.wrong.strip(), c.right.strip())
+    return {"ok": True}
+
+
+@app.delete("/api/corrections/{cid}")
+def corr_del(cid: int):
+    db.corr_del(me(), cid)
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------- frontend statico (PWA)

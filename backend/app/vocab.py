@@ -23,8 +23,8 @@ BUILTIN = {
 }
 
 
-def terms_for(context: str):
-    custom = [v["term"] for v in db.vocab_list() if v["context"] in (context, "*")]
+def terms_for(context: str, owner="admin"):
+    custom = [v["term"] for v in db.vocab_list(owner) if v["context"] in (context, "*")]
     seen, out = set(), []
     for t in custom + BUILTIN.get(context, []):
         if t.lower() not in seen:
@@ -33,18 +33,18 @@ def terms_for(context: str):
     return out
 
 
-def whisper_prompt(context: str, limit: int = 600):
-    terms = terms_for(context)
+def whisper_prompt(context: str, limit: int = 600, owner="admin"):
+    terms = terms_for(context, owner)
     if not terms:
         return None
     p = "Glossario: " + ", ".join(terms) + "."
     return p[:limit]
 
 
-def suggestions(segments, context: str, cutoff: float = 0.84):
+def suggestions(segments, context: str, cutoff: float = 0.84, owner="admin"):
     """Parole della trascrizione foneticamente/graficamente vicine a un termine del glossario ma diverse.
     Solo proposte: [{seg, word, term, score}]."""
-    terms = [t for t in terms_for(context) if " " not in t and len(t) >= 5]
+    terms = [t for t in terms_for(context, owner) if " " not in t and len(t) >= 5]
     tl = {t.lower(): t for t in terms}
     out = []
     for si, s in enumerate(segments):

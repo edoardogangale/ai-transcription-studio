@@ -22,8 +22,10 @@ def visible_segments(t, teacher_only=True):
     """Segmenti da esportare. Con 'solo insegnante' scarta le voci riconosciute come estranee."""
     teacher = teacher_of(t)
     segs = t.get("segments") or []
-    if teacher_only and teacher:
-        segs = [s for s in segs if s.get("speaker") in (None, teacher)]
+    if teacher_only:
+        segs = [s for s in segs if not s.get("off_topic")]          # parti fuori tema confermate dall'utente
+        if teacher:
+            segs = [s for s in segs if s.get("speaker") in (None, teacher)]
     return [s for s in segs if s["text"].strip()]
 
 

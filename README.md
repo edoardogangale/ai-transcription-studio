@@ -7,17 +7,43 @@ Applicazione **privata e locale** per trascrivere registrazioni (soprattutto lez
 
 > Progetto indipendente: non ha alcun legame con altri repository.
 
-## Avvio rapido
+## Come la avvio? (scegli UNA strada)
 
-Requisiti: **Python 3.11+** e **FFmpeg** (`sudo apt install ffmpeg` · `brew install ffmpeg` · `winget install Gyan.FFmpeg`).
+L'app ha due parti: i **modelli AI** girano su un computer/server (non nel browser: un browser non può eseguire modelli Python), e l'**iPad** è lo schermo. Serve quindi un posto dove farla girare.
 
+### A) Hai solo l'iPad → GitHub Codespaces (gratis, nessun computer)
+1. Sull'iPad apri **github.com** in Safari, entra nel tuo account, apri la repository **ai-transcription-studio**.
+2. Tocca **Code → Codespaces → Create codespace on main** (la prima volta ci vogliono 2–3 minuti: installa tutto da solo e **avvia l'app**).
+3. Si apre l'editor: nel terminale in basso vedi un riquadro con **l'indirizzo** (`https://….app.github.dev`) e il **codice amministratore**. Se non lo vedi: scheda **PORTE** → porta 8000 → icona del globo; il codice è in `~/.ai-transcription-studio/token.txt` (`cat` dal terminale).
+4. Apri l'indirizzo, inserisci il codice. **Condividi → Aggiungi a Home**: ora è un'app sul tuo iPad.
+5. **Modelli AI → Installa** (Parakeet v3 + Whisper Turbo bastano) — **una volta sola**: restano salvati nel Codespace anche quando si ferma per inattività. Non eliminare il Codespace e non dovrai riscaricare nulla.
+6. Dalle volte successive: da GitHub → Codespaces → riprendi il tuo (l'app riparte da sola); oppure, se è ancora acceso, apri direttamente l'icona sulla Home.
+
+*Limiti onesti*: i Codespaces gratuiti hanno una quota mensile di ore e spazio (l'ordine di grandezza è ~120 ore-core e ~15 GB al mese: **controlla** in GitHub → Settings → Billing, può cambiare); il Codespace si ferma dopo un po' di inattività e va ripreso; CPU a 4 core, niente GPU (quindi Parakeet/Turbo sì, Whisper Large V3 no). Questa strada **non è stata provata qui**: i file `.devcontainer` e gli script sono scritti e controllati nella parte che posso eseguire, ma non ho potuto avviare un vero Codespace.
+
+### B) Hai un computer (Mac/Windows/Linux) → lo avvii lì
+Requisiti: **Python 3.11+** e **FFmpeg** (`brew install ffmpeg` · `winget install Gyan.FFmpeg` · `sudo apt install ffmpeg`).
 ```bash
-./scripts/start.sh                 # solo questo computer → http://localhost:8000
-./scripts/start.sh --lan           # raggiungibile da iPad/altri PC, protetto da token
-./scripts/start.sh --lan --https   # come sopra con HTTPS autofirmato (serve per microfono/condivisione da iPad)
+./scripts/start.sh                 # solo su questo computer → http://localhost:8000
+./scripts/start.sh --lan           # raggiungibile dall'iPad (stesso Wi-Fi), con codice di accesso
+./scripts/start.sh --lan --https   # come sopra con HTTPS autofirmato (serve per microfono e condivisione da iPad)
 ```
-Windows: `scripts\start.bat` oppure `scripts\start.bat lan`. Lo script crea il virtualenv, installa le dipendenze e stampa indirizzo e token.
-Poi: **Modelli AI → Installa** (i pesi si scaricano solo quando lo chiedi, da GitHub: niente account, token o Hugging Face) → **Nuova trascrizione** oppure **Live**.
+Windows: `scripts\start.bat` oppure `scripts\start.bat lan`. Poi sull'iPad apri l'indirizzo stampato e inserisci il codice. Con un Mac Apple Silicon la correzione AI è molto più veloce.
+**Dall'iPad fuori casa** (e per i compagni): [Tailscale](https://tailscale.com) (gratuito) dà un indirizzo HTTPS privato al tuo computer: `tailscale serve --bg 8000`. Non esporre mai la porta direttamente su Internet.
+
+### C) Un server/NAS con Docker
+`docker compose up -d` (imposta `STUDIO_TOKEN` con un codice tuo). I modelli stanno nel volume `studio-data`: si scaricano una volta sola.
+
+### I modelli si scaricano UNA volta sola
+Stanno **fuori dalla cartella del progetto**: `~/.ai-transcription-studio/models` (Codespaces: nella home del Codespace; Docker: volume). Aggiornare o riscaricare il progetto non li tocca; la pagina *Modelli AI* ti dice dove sono e ti avvisa se la posizione non è persistente. Ripetere il download serve solo se **elimini tu** il Codespace/volume o la cartella.
+
+## Per i tuoi compagni (profili con archivi separati)
+Quando l'app è protetta (`--lan`, Codespaces, Docker) il codice che vedi all'avvio è **amministratore**. In **Impostazioni → Persone** crei un profilo per ogni compagno: ricevono un **codice personale** (mostrato una sola volta) e un indirizzo da aprire sul loro iPad.
+- Ognuno ha un **archivio privato**: registrazioni, audio, cartelle, vocabolario e correzioni sono separati. **Nemmeno tu** vedi le registrazioni degli altri (verificato da test automatici).
+- I **modelli e la potenza di calcolo sono condivisi**: li installi tu una volta per tutti (i compagni non possono installare/eliminare modelli né cambiare impostazioni).
+- Se un compagno perde il codice: *Nuovo codice*. Eliminare un profilo elimina **definitivamente** anche le sue registrazioni.
+- Se ci sono molte persone insieme, i lavori si mettono in coda e girano a coppie (impostazione "in parallelo"): su un Codespace a 4 core aspettati attese.
+- **Privacy**: tutto resta sul server che scegli tu (il tuo Codespace/computer). Per le registrazioni dei compagni, tu come amministratore sei responsabile di quel server: dì loro dove girano i loro audio.
 
 ## Funzioni
 
@@ -32,6 +58,8 @@ Poi: **Modelli AI → Installa** (i pesi si scaricano solo quando lo chiedi, da 
 | **Lavoro in background** | Trascrizione e salvataggio dell'audio live avvengono sul server: continuano anche chiudendo la pagina. Centro attività (come i download) con caricamenti, trascrizioni, download dei modelli, registrazione; notifiche di sistema di avanzamento/fine. Vedi "Background: cosa è garantito". |
 | **Ascolto con testo evidenziato** | Vista *Ascolto*: parola corrente evidenziata e sottolineata, parole già dette colorate, il resto attenuato, scorrimento automatico, clic su una parola per ripartire da lì. Con timestamp per parola (Parakeet) è preciso; con Whisper è una **stima** proporzionale (lo dichiara). Vista *Modifica* per correggere. |
 | **Chi parla** | Riconoscimento dei parlanti locale (pyannote segmentation 3.0 + WeSpeaker). L'insegnante = chi parla di più (modificabile). Le altre voci sono nascoste ed escluse da copia/PDF (si possono mostrare), oppure **non trascritte affatto** ("solo l'insegnante": più veloce). |
+| **Più persone** | Profili con codice personale e archivio **privato** (anche l'amministratore non vede quello degli altri); modelli e calcolo condivisi. Vedi "Per i tuoi compagni". |
+| **Correzione AI** | Facoltativa: LLM locale gratuito (Qwen3 via Ollama) che *propone* correzioni e segnala parti fuori tema; approvi tu, con diff e controlli di sicurezza; ricorda le correzioni per materia. Vedi "Correzione con AI". |
 
 ## Modelli (tre per lingua + due veloci)
 
@@ -90,13 +118,10 @@ Il browser invia PCM 16 kHz via WebSocket; il server salva subito l'audio su dis
 - ✘ **Browser e sistema possono sospendere il microfono** se l'app va in background o lo schermo si blocca, soprattutto su iPad/iPhone. Per lezioni lunghe tieni l'app aperta sullo schermo o registra con Memo Vocali e **carica** il file (poi la trascrizione prosegue sul server).
 - ✘ **Notifiche ad app completamente chiusa**: richiederebbero Web Push (chiavi VAPID, HTTPS e, per forza di cose, servizi push di Apple/Google). **Non implementato**, per non introdurre servizi esterni. Un caricamento in corso si interrompe se chiudi la pagina.
 
-## Uso dall'iPad
-
-Un browser HTML **non può eseguire modelli Python installati su un altro dispositivo**: l'iPad è solo lo schermo; i modelli girano sul computer dove avvii l'app.
-1. Avvia con `--lan` (stessa rete Wi-Fi) e apri sull'iPad l'indirizzo stampato; inserisci il token.
-2. Safari: *Condividi → Aggiungi a Home* per installarla come PWA.
-3. **Microfono e condivisione file richiedono HTTPS**: usa `--lan --https` e fidati del certificato autofirmato. Senza HTTPS la registrazione live non parte (l'app lo dice) e "Condividi audio" scarica il file.
-4. Non esporre mai la porta su Internet: il token protegge l'accesso in rete locale, non è pensato per l'esposizione pubblica.
+## Uso dall'iPad (iPad Pro M5 e altri)
+Interfaccia pensata per il touch: bersagli ≥ 44 px, strumenti sempre visibili (nessuna funzione dipende dall'hover), "Sposta in…" al posto del solo trascinamento, vista a due colonne in orizzontale e a colonna in verticale (iPad Pro 11" e 13"), installabile dalla Home. **Collaudata con un iPad Pro emulato in Chromium (non Safari reale)**: touch, 11"/13", verticale/orizzontale, 34 controlli superati.
+- **Microfono e condivisione dei file richiedono HTTPS**: con Codespaces o Tailscale ce l'hai già; in rete locale usa `--lan --https` e fidati del certificato. Senza HTTPS la registrazione live non parte (l'app lo dice) e "Condividi audio" scarica il file.
+- Caricare file: dal selettore file dell'iPad (anche *Memo Vocali*, m4a). Su iPad il trascinamento fra cartelle non c'è: usa "📁 Sposta in…".
 
 ## Come funziona la trascrizione
 
@@ -113,23 +138,35 @@ Avanzamento: solo conteggi reali ("segmento 3 di 12"), nessuna percentuale o tem
 - **A Fedele**: testo del modello con le tue correzioni. **B Pulita**: regole deterministiche (toglie solo intercalari tipo "ehm" e raddoppi di parole funzione; paragrafi dalle pause; nessun LLM). **C Appunti**: richiede un LLM locale via [Ollama](https://ollama.com); senza, è dichiarata indisponibile; l'output è marcato come rielaborazione AI.
 - **Vocabolario**: con questo runtime nessun modello accetta un prompt/glossario, quindi i termini (contesti Matematica, Fisica, … più i tuoi) generano solo **suggerimenti di correzione** nell'editor (parole molto simili a un termine): li applichi tu con un clic, **mai sostituzioni automatiche**.
 
+## Correzione con AI (facoltativa, gratuita, open source)
+Serve **solo se** la trascrizione non è già abbastanza buona: l'app valuta caso per caso se conviene ("consigliata", "facoltativa", "probabilmente non serve") in base al modello usato (dalle misure sopra) e ai punti dubbi trovati. Con Whisper Turbo/Large di solito **non serve**; con Parakeet è facoltativa (nomi e termini tecnici); con i modelli veloci è consigliata.
+- **Come funziona**: un piccolo LLM locale via [Ollama](https://ollama.com) (nessun dato esce dal computer). Modello consigliato: **Qwen3 4B** (licenza Apache-2.0, ~2,6 GB, anche su CPU); **Qwen3 8B** (~5,2 GB, 16 GB di RAM) capisce meglio il contesto; i modelli si scaricano **una volta sola** dall'app (Impostazioni → Correzione con AI) e restano in Ollama. Su Linux/Codespaces: `bash scripts/install_ollama.sh`; su Mac/Windows installa l'app da ollama.com.
+- **Che cosa fa**: corregge parole ascoltate male, nomi propri e termini scritti male, accenti e apostrofi; **segnala** (non cancella) le parti fuori tema (chiacchiere, rumori, allucinazioni). Il testo originale resta sempre salvato.
+- **Mai modifiche automatiche**: l'AI propone, vedi il *diff* parola per parola con ▶ per riascoltare, e approvi ciò che vuoi. Le parti fuori tema non sono preselezionate. Ogni proposta passa controlli di sicurezza: se cambia troppe parole, altera un numero o toglie un termine del glossario viene **scartata** (e te lo dice).
+- **"Istruirla"** (senza addestramento, che non è fattibile gratis su un PC/iPad): le dai contesto — materia, argomento della cartella, il tuo glossario, **istruzioni personali per cartella** ("il professore chiama gli studenti per nome: ignorali…") e la **memoria delle correzioni** che hai già approvato (riproposte anche senza AI nelle trascrizioni future e date all'AI come esempio). Impostazioni → *Memoria delle correzioni*.
+- **Solo i punti dubbi** (predefinito se ce ne sono) o tutto il testo: l'AI su CPU è lenta (ordine di grandezza: decine di minuti per una lezione intera), quindi conviene limitarsi ai punti sospetti.
+- **Cosa NON ho potuto verificare**: Hugging Face e il registro di Ollama non sono raggiungibili dal mio ambiente, quindi **non ho mai eseguito un LLM vero**. Tutta la logica (prompt, schema JSON, controlli di sicurezza, diff, approvazione, memoria, errori) è collaudata con un server finto compatibile con Ollama, anche con risposte "cattive" di proposito. **La qualità reale delle correzioni di Qwen3 sul tuo audio è da verificare con una prova**: fai una revisione su una lezione che conosci e guarda il diff prima di approvare. La scelta di Qwen3 si basa su licenza (Apache-2.0) e supporto multilingue dichiarato dal produttore, non su un benchmark indipendente sull'italiano che io abbia trovato.
+
 ## Test
 
 ```bash
-./scripts/test.sh            # 47 test backend (~20 s); --slow aggiunge il file sintetico da 190 minuti
+./scripts/test.sh            # 60 test backend (~25 s); --slow aggiunge il file sintetico da 190 minuti
 STUDIO_REAL=1 STUDIO_DATA=/percorso/data STUDIO_TEST_EN=en.wav STUDIO_TEST_WAV=... STUDIO_TEST_TRUTH=... \
   pytest backend/tests/real_models     # test con MODELLI VERI (genera l'audio con real_models/make_speech.py)
 node tests/e2e/e2e_mock.mjs ...        # browser, tutti i flussi (server con STUDIO_ENABLE_MOCK=1)
 node tests/e2e/e2e_real.mjs ...        # browser con modelli veri (server normale)
+node tests/e2e/e2e_users_ai.mjs ...    # profili, accesso, correzione AI (server con STUDIO_TOKEN + tests/e2e/fake_ollama.py)
+node tests/e2e/e2e_ipad.mjs ...        # iPad Pro emulato: touch, bersagli, orientamenti
 ```
-**Superati in sviluppo**: 47 test backend (pipeline, cartelle, ricerca, PDF unico, ZIP audio, parallelismo reale, live via WebSocket, recupero dopo crash, filtro insegnante…); 4 test con modelli veri (parlanti + solo insegnante, live, tutti i modelli in inglese); **57 controlli nel browser** con mock (cartelle, 3 file in parallelo con avvio automatico, copia multipla, PDF unico, condivisione, evidenziazione parola per parola, note, live con microfono finto, responsive iPad/smartphone) e **19 con modelli veri** (parola evidenziata coerente con i tempi del modello, salto alla parola, voci estranee escluse, live).
+**Superati in sviluppo**: 60 test backend (inclusi profili isolati e correzione AI con finto Ollama) (pipeline, cartelle, ricerca, PDF unico, ZIP audio, parallelismo reale, live via WebSocket, recupero dopo crash, filtro insegnante…); 4 test con modelli veri (parlanti + solo insegnante, live, tutti i modelli in inglese); **57 controlli nel browser** con mock (cartelle, 3 file in parallelo con avvio automatico, copia multipla, PDF unico, condivisione, evidenziazione parola per parola, note, live con microfono finto, responsive iPad/smartphone) e **25 su profili/accesso/AI**, **34 su iPad Pro emulato** e **19 con modelli veri** (parola evidenziata coerente con i tempi del modello, salto alla parola, voci estranee escluse, live).
 Il mock (`STUDIO_ENABLE_MOCK=1`) aggiunge due schede "MOCK" chiaramente etichettate; non esiste in uso normale.
 
 ## Cosa NON è stato verificato
 
 - **Parlato reale**: tutti i test di accuratezza usano voce sintetica; il WER su lezioni vere (rumore, accenti, termini tecnici) è **sconosciuto**. Usa *Confronta modelli* + WER con un riferimento corretto a mano per decidere.
 - **GPU**: nessuna disponibile; il provider CUDA di sherpa-onnx richiede la sua build CUDA (non installata né provata). Su CPU tutto è provato.
-- **iPad/Safari reali**: HTTPS, microfono, Web Share, notifiche e comportamento in background sono descritti ma provati solo su Chromium.
+- **iPad/Safari reali**: HTTPS, microfono, Web Share, notifiche e comportamento in background sono descritti ma provati solo su Chromium (anche iPad emulato). **GitHub Codespaces, Docker e Tailscale non sono stati avviati davvero.**
+- **Un LLM vero** (vedi sopra).
 - **Licenze** dei modelli: riportate da fonti terze, da confermare sulle model card. Ollama/appunti con LLM presente non provato (solo il caso "assente").
 - Audio di durata 2–3 ore con modelli veri: la segmentazione è provata su 190 minuti sintetici, l'inferenza reale solo su file brevi.
 

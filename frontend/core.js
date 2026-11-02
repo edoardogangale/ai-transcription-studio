@@ -3,6 +3,8 @@
    Tutto ciò che deve continuare quando cambi pagina (upload, registrazione live, polling) vive qui o in live.js,
    non dentro le singole pagine. */
 const $app = document.getElementById("app");
+// dispositivi con schermo tattile (iPad compreso, anche con tastiera/trackpad): bersagli grandi e strumenti sempre visibili
+try { if (navigator.maxTouchPoints > 0 || matchMedia("(any-pointer:coarse)").matches) document.documentElement.classList.add("touch"); } catch (e) {}
 // replaceChildren ignora null/false e appiattisce gli array (evita "false"/"null" come testo nella pagina)
 const _rc = Element.prototype.replaceChildren;
 Element.prototype.replaceChildren = function (...n) { return _rc.apply(this, n.flat(Infinity).filter(x => x != null && x !== false)); };
@@ -39,9 +41,32 @@ async function api(path, opt = {}) {
   if (token()) o.headers["X-Studio-Token"] = token();
   if (opt.json !== undefined) { o.method = o.method || "POST"; o.headers["Content-Type"] = "application/json"; o.body = JSON.stringify(opt.json); delete o.json; }
   const r = await fetch(path, o);
-  if (r.status === 401) { const t = prompt("Questo server è protetto. Inserisci il token di accesso:"); if (t) { LS.set("studio_token", t.trim()); return api(path, opt); } throw new Error("Accesso negato"); }
+  if (r.status === 401) { await askLogin(); return api(path, opt); }
   if (!r.ok) { let m = r.statusText; try { m = (await r.json()).detail || m; } catch {} throw new Error(typeof m === "string" ? m : JSON.stringify(m)); }
   return r.status === 204 ? null : r.json();
+}
+
+/* accesso con codice personale (server condiviso con altre persone) */
+let loginP = null;
+function askLogin() {
+  if (loginP) return loginP;
+  loginP = new Promise(res => {
+    const err = h("div", { class: "err" }), inp = h("input", { type: "password", placeholder: "Il tuo codice di accesso", autocomplete: "current-password", autofocus: true, style: "font-size:18px" });
+    const go = async () => {
+      const code = inp.value.trim(); if (!code) return;
+      const r = await fetch("/api/me", { headers: { "X-Studio-Token": code } });
+      if (r.ok) { LS.set("studio_token", code); d.close(); d.remove(); loginP = null; res(); if (typeof showWho === "function") showWho(); route(); } else err.textContent = "Codice non valido.";
+    };
+    inp.addEventListener("keydown", e => { if (e.key === "Enter") go(); });
+    const d = h("dialog", { class: "modal" }, h("h3", null, "Accedi"), h("p", { class: "m" }, "Inserisci il codice che ti ha dato chi gestisce questa app. Le tue registrazioni sono visibili solo a te."), inp, err,
+      h("div", { class: "row", style: "justify-content:flex-end;margin-top:14px" }, h("button", { class: "primary", onclick: go }, "Entra")));
+    d.addEventListener("cancel", e => e.preventDefault()); document.body.append(d); d.showModal(); setTimeout(() => inp.focus(), 50);
+  });
+  return loginP;
+}
+async function showWho() {
+  try { const me = await api("/api/me"), w = document.getElementById("who"); if (!w) return;
+    w.replaceChildren(me.multiuser ? [h("span", { class: "m" }, "👤 " + me.name), h("button", { class: "small", onclick: () => { LS.set("studio_token", ""); location.reload(); } }, "Esci")] : null); window.ME = me; } catch {}
 }
 
 /* dialogo modale semplice */
@@ -233,7 +258,7 @@ const Uploads = {
 
 function startApp() {
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("sw.js").catch(() => {});
-  pollActivity(); setInterval(pollActivity, 2000);
+  showWho(); pollActivity(); setInterval(pollActivity, 2000);
   addEventListener("beforeunload", e => { if (UP.items.some(u => u.state === "uploading") || (window.Recorder && Recorder.state !== "idle")) { e.preventDefault(); e.returnValue = ""; } });
   route();
 }

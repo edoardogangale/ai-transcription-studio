@@ -1,0 +1,13 @@
+# docker compose up -d      → http://localhost:8000   (cambia STUDIO_TOKEN con un codice tuo: è il codice amministratore)
+services:
+  studio:
+    build: .
+    ports: ["8000:8000"]
+    environment:
+      STUDIO_TOKEN: "${STUDIO_TOKEN:-cambia-questo-codice}"
+      OLLAMA_URL: "${OLLAMA_URL:-http://host.docker.internal:11434}"   # Ollama installato sul computer (correzione AI, facoltativa)
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    volumes: ["studio-data:/data"]          # modelli e archivio: persistono, si scaricano una sola volta
+    restart: unless-stopped
+volumes:
+  studio-data:

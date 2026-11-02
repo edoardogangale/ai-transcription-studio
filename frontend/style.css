@@ -137,3 +137,35 @@ canvas.meter{width:100%;height:40px;display:block}
 .row select,.row input[type=search]{width:auto;max-width:100%}
 .row input[type=search]{min-width:220px}
 .title-in{flex:1;min-width:220px;width:auto!important}
+
+/* ---- AI, profili, iPad ---- */
+.who{display:flex;gap:8px;align-items:center;white-space:nowrap}
+.codebox{font:600 22px ui-monospace,Menlo,monospace;letter-spacing:.04em;padding:14px;border-radius:12px;background:var(--bg2);border:1px dashed var(--accent);text-align:center;user-select:all;word-break:break-all}
+.ai summary{cursor:pointer;color:var(--ink);font-size:15px}.ai h3{margin:0 0 6px}
+.aiitems{display:grid;gap:4px}.aiitem{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;border-radius:10px;background:var(--card);border:1px solid var(--line)}.aiitem.applied{opacity:.55}
+.aiitem .ts{min-height:32px;padding:2px 8px;font-size:13px;color:var(--accent);border:none;background:transparent}
+.aiitem input[type=checkbox]{margin-top:6px}
+html.touch button,html.touch .btn{min-height:46px}
+html.touch button.small{min-height:42px;padding:6px 12px}
+html.touch .tool{min-height:42px;min-width:42px}
+html.touch .tools{opacity:1}
+html.touch .seg .ts{min-height:42px}
+html.touch .spk,html.touch .notechip{min-height:36px}
+html.touch .fmore{min-height:44px;min-width:44px}
+html.touch .fname{min-height:46px}
+html.touch .segs.listen .seg .txt{font-size:19px;line-height:1.8}
+html.touch input[type=checkbox],html.touch input[type=radio]{width:24px;height:24px}
+html.touch .seg{padding:10px 8px}
+html.touch .topbar nav a{min-height:44px}
+@media(min-width:861px){
+html.touch .player{top:76px}
+html.touch .editor{grid-template-columns:minmax(300px,360px) 1fr}
+}
+html.touch label.opt{min-height:46px;align-items:center}
+html.touch .act-pill{min-height:46px}
+html.touch summary{min-height:44px;display:flex;align-items:center}
+html.touch select,html.touch input[type=text],html.touch input[type=search],html.touch input[type=password],html.touch input[type=number]{min-height:46px}
+html.touch .tabs button{min-height:44px}
+html.touch .speeds button{min-height:44px;min-width:52px}
+html.touch .icon-btn{width:46px}
+html.touch button.small,html.touch .item button{min-width:44px;justify-content:center}

@@ -55,6 +55,9 @@ async function folderMenu(f) {
   const body = h("div", { class: "grid" },
     h("p", { class: "m" }, p.model_id ? `Ultima scelta in questa cartella: ${mname(p.model_id)} · ${p.language || ""} · ${p.context || ""} (verrà riproposta alla prossima trascrizione)` : "Quando trascrivi qui, l'app ricorda lingua, modello e contesto."),
     h("button", { onclick: async () => { const n = await askText("Nuovo argomento in «" + f.name + "»", "Nome dell'argomento"); if (n) { await api("/api/folders", { json: { name: n, parent_id: f.id } }); document.querySelector("dialog")?.close(); loadLib(); } } }, "＋ Nuovo argomento (sottocartella)"),
+    h("button", { onclick: async () => { const ta = h("textarea", { style: "min-height:110px", placeholder: "Es.: «Il professore chiama gli studenti per nome: ignorali. I termini di filosofia vanno con la maiuscola.»" }); ta.value = p.ai_instructions || "";
+        const r = await modal("Istruzioni per l'AI · " + f.name, h("div", null, h("p", { class: "m" }, "Servono alla correzione AI: spiega il contesto e cosa è importante o da ignorare. Valgono anche per le sotto-cartelle."), ta), [["Annulla", null], ["Salva", () => ({ v: ta.value.trim() }), "primary"]]);
+        if (r) { await api("/api/folders/" + f.id, { method: "PATCH", json: { prefs: { ai_instructions: r.v } } }); document.querySelector("dialog")?.close(); toast("Istruzioni salvate"); loadLib(); } } }, "✨ Istruzioni per l'AI"),
     h("button", { onclick: async () => { const n = await askText("Rinomina", "Nome", f.name); if (n) { await api("/api/folders/" + f.id, { method: "PATCH", json: { name: n } }); document.querySelector("dialog")?.close(); loadLib(); } } }, "Rinomina"),
     h("button", { onclick: async () => {
         const sel = h("select", null, [{ id: "", label: "Livello principale (materia)" }, ...folderOptions(false).filter(o => o.id !== f.id)].map(o => h("option", { value: o.id }, o.label)));

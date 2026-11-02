@@ -38,6 +38,7 @@ ROUTES.push([/^#\/c\/(\w+)$/, async gid => {
 /* ---------- Modelli AI ---------- */
 ROUTES.push([/^#\/models$/, async () => {
   const box = h("div"); $app.replaceChildren(h("h1", null, "Modelli AI"), h("p", { class: "sub" }, "I pesi si scaricano solo quando premi “Installa”, da GitHub (nessun account, nessun token, nessun Hugging Face). Un solo runtime per tutti: sherpa-onnx."), box);
+  let admin = true;
   const card = m => {
     const ins = m.install || {}, dl = ["downloading", "starting", "extracting"].includes(ins.state), pct = ins.total ? Math.min(100, 100 * (ins.downloaded || 0) / ins.total) : 0;
     return h("div", { class: "card" }, h("div", { class: "row sp" }, h("h3", null, m.name), m.installed ? h("span", { class: "chip ok" }, "Installato · " + fmtB(m.disk_bytes)) : h("span", { class: "chip" }, "Non installato · " + fmtB(m.download_bytes))),
@@ -48,14 +49,14 @@ ROUTES.push([/^#\/models$/, async () => {
       dl && h("div", null, h("div", { class: "bar" }, h("i", { style: `width:${pct}%` })), h("div", { class: "m" }, ins.state === "extracting" ? "Estrazione…" : ins.total ? `${fmtB(ins.downloaded || 0)} / ${fmtB(ins.total)}` : "Preparazione…")),
       ins.state === "error" && h("div", { class: "notice bad" }, ins.error),
       h("div", { class: "row", style: "margin-top:10px" },
-        !m.installed && !dl && h("button", { class: "primary", disabled: !m.compatible, onclick: async () => { if (confirm(`Scaricare ${m.name} (${fmtB(m.download_bytes)})?`)) { try { await api(`/api/models/${m.id}/install`, { method: "POST" }); load(); } catch (e) { toast(e.message); } } } }, "Installa"),
+        !m.installed && !dl && h("button", { class: "primary", disabled: !m.compatible || !admin, title: admin ? "" : "Solo l'amministratore può installare modelli (si installano una volta sola per tutti)", onclick: async () => { if (confirm(`Scaricare ${m.name} (${fmtB(m.download_bytes)})?`)) { try { await api(`/api/models/${m.id}/install`, { method: "POST" }); load(); } catch (e) { toast(e.message); } } } }, "Installa"),
         dl && h("button", { onclick: async () => { await api(`/api/models/${m.id}/cancel`, { method: "POST" }); load(); } }, "Annulla download"),
-        m.installed && h("button", { class: "danger", onclick: async () => { if (confirm("Eliminare i pesi di " + m.name + "?")) { try { await api("/api/models/" + m.id, { method: "DELETE" }); load(); } catch (e) { toast(e.message); } } } }, "Elimina pesi")));
+        m.installed && admin && h("button", { class: "danger", onclick: async () => { if (confirm("Eliminare i pesi di " + m.name + "?")) { try { await api("/api/models/" + m.id, { method: "DELETE" }); load(); } catch (e) { toast(e.message); } } } }, "Elimina pesi")));
   };
   async function load() {
-    const [r, sys] = await Promise.all([api("/api/models/all"), api("/api/system")]);
+    const [r, sys] = await Promise.all([api("/api/models/all"), api("/api/system")]); admin = !!(sys.me && sys.me.admin);
     const by = t => r.models.filter(m => m.tier === t);
-    box.replaceChildren(h("div", { class: "notice" }, `Spazio occupato dai modelli: ${fmtB(r.total_disk_bytes)} · spazio libero: ${sys.disk_free_gb} GB`),
+    box.replaceChildren(h("div", { class: "notice" + (sys.persistence && !sys.persistence.ok ? " warn" : "") }, sys.persistence ? sys.persistence.text : ""), h("div", { class: "notice", style: "margin-top:8px" }, `Spazio occupato dai modelli: ${fmtB(r.total_disk_bytes)} · spazio libero: ${sys.disk_free_gb} GB`),
       h("h2", null, "Modelli principali (tre per lingua)"), h("div", { class: "grid g2" }, by("main").map(card)),
       h("h2", null, "Modelli veloci (meno accurati)"), h("div", { class: "grid g2" }, by("fast").map(card)),
       h("h2", null, "Componenti"), h("div", { class: "grid g2" }, by("component").map(card)));
@@ -76,7 +77,46 @@ ROUTES.push([/^#\/settings$/, async () => {
   drawV(v.custom);
   const nstate = h("span", { class: "m" }), upN = () => nstate.textContent = Notif.supported() ? { granted: "attive ✓", denied: "bloccate dal browser (riattivale dalle impostazioni del sito)", default: "non ancora attivate" }[Notif.perm()] : "non supportate da questo browser";
   upN();
-  const tok = h("input", { type: "password", value: token(), placeholder: "Token di accesso (se il server è protetto)", onchange: e => { LS.set("studio_token", e.target.value.trim()); toast("Token salvato"); } });
+  const tok = h("input", { type: "password", value: token(), placeholder: "Codice di accesso (se il server è protetto)", onchange: e => { LS.set("studio_token", e.target.value.trim()); toast("Codice salvato"); } });
+  const isAdmin = !!(sys.me && sys.me.admin);
+
+  /* ---- Persone: profili con archivio privato ---- */
+  const showCode = (name, code) => modal("Codice di " + name, h("div", null, h("p", null, "Dallo a ", h("b", null, name), ". Lo vedi solo ora: se lo perde, generane uno nuovo."),
+    h("div", { class: "codebox" }, code), h("p", { class: "m" }, "Indirizzo da aprire sull'iPad: ", h("b", null, location.origin), " — poi inserisce il codice. Per usarla come app: Condividi → Aggiungi a Home.")),
+    [["Copia codice", () => { copyText(code); toast("Copiato"); return null; }], ["Chiudi", null, "primary"]]);
+  const peopleBox = h("div");
+  async function drawPeople() {
+    if (!isAdmin) return peopleBox.replaceChildren(h("p", { class: "m" }, "I profili li gestisce l'amministratore."));
+    if (!sys.multiuser) return peopleBox.replaceChildren(h("div", { class: "notice warn" }, "Per far usare l'app ad altre persone serve un codice amministratore: avvia con ", h("code", null, "./scripts/start.sh --lan"), " (o su Codespaces/Docker, già attivo). Poi qui crei un profilo per ciascuna."));
+    const us = (await api("/api/users")).users, nm = h("input", { type: "text", placeholder: "Nome (es. Marco)" });
+    peopleBox.replaceChildren(h("div", { class: "row" }, h("div", { class: "grow" }, nm), h("button", { class: "primary", onclick: async () => { if (!nm.value.trim()) return; const r = await api("/api/users", { json: { name: nm.value } }); await showCode(r.name, r.code); drawPeople(); } }, "Crea profilo")),
+      us.length ? h("div", { class: "list", style: "margin-top:10px" }, us.map(u => h("div", { class: "item" }, h("span", { class: "grow" }, "👤 " + u.name),
+        h("button", { class: "small", onclick: async () => { if (confirm("Generare un nuovo codice per " + u.name + "? Il vecchio smette di funzionare.")) { const r = await api(`/api/users/${u.id}/reset`, { method: "POST" }); showCode(u.name, r.code); } } }, "Nuovo codice"),
+        h("button", { class: "small danger", onclick: async () => { if (confirm("Eliminare il profilo di " + u.name + " E DEFINITIVAMENTE tutte le sue registrazioni, audio e cartelle?")) { await api("/api/users/" + u.id, { method: "DELETE" }); drawPeople(); } } }, "Elimina")))) : h("p", { class: "m" }, "Nessun altro profilo."));
+  }
+  drawPeople();
+
+  /* ---- Correzione AI (facoltativa) e memoria delle correzioni ---- */
+  const aiBox = h("div"), memBox = h("div");
+  async function drawAI() {
+    const st = await api("/api/ai/status");
+    const pulling = st.recommended.some(m => m.pull && ["starting", "downloading"].includes(m.pull.state));
+    aiBox.replaceChildren(
+      h("div", { class: "notice" + (st.reachable ? "" : " warn") }, st.reachable ? `Ollama attivo · modelli installati: ${st.models.join(", ") || "nessuno"}` : "Ollama non è in esecuzione su questo computer."),
+      !st.reachable && h("div", { class: "m", style: "margin:8px 0" }, h("p", null, "Ollama è gratuito e open source (ollama.com) e fa girare l'AI sul tuo computer, senza inviare nulla fuori."),
+        h("ul", null, h("li", null, "Mac/Windows: scarica e installa da ollama.com, poi aprilo."), h("li", null, "Linux/Codespaces: ", h("code", null, "bash scripts/install_ollama.sh")), h("li", null, "Poi torna qui e aggiorna la pagina."))),
+      st.reachable && h("div", { class: "list", style: "margin-top:8px" }, st.recommended.map(m => h("div", { class: "item" }, h("div", { class: "grow" }, h("div", { class: "t" }, m.name + (m.id === "qwen3:4b" ? " · consigliato" : "")), h("div", { class: "m" }, `~${m.approx_gb} GB · RAM ≥ ${m.min_ram_gb} GB · ${m.license} · ${m.note}`),
+          m.pull && ["starting", "downloading"].includes(m.pull.state) && h("div", { class: "bar" }, h("i", { style: `width:${m.pull.total ? 100 * m.pull.completed / m.pull.total : 3}%` })), m.pull && m.pull.state === "error" && h("div", { class: "err m" }, m.pull.error)),
+        m.installed ? h("span", { class: "chip ok" }, "Installato") : h("button", { class: "small primary", disabled: !isAdmin || !m.fits, title: !isAdmin ? "Solo l'amministratore" : !m.fits ? "RAM insufficiente" : "", onclick: async () => { if (confirm(`Scaricare ${m.name} (~${m.approx_gb} GB)? Si fa una volta sola.`)) { try { await api("/api/ai/pull", { json: { model: m.id } }); drawAI(); } catch (e) { toast(e.message, 6000); } } } }, "Installa")))),
+      h("p", { class: "m" }, "Si usa solo se serve (l'app ti dice quando conviene) e propone correzioni che approvi tu. Provato qui solo con un finto server compatibile: la qualità reale dipende dal modello e dal computer."));
+    if (pulling) { clearTimeout(drawAI.t); drawAI.t = setTimeout(drawAI, 2000); }
+  }
+  async function drawMem() {
+    const c = (await api("/api/corrections")).corrections, w = h("input", { type: "text", placeholder: "Parola sbagliata (es. Cante)" }), r = h("input", { type: "text", placeholder: "Scrittura corretta (es. Kant)" }), sc = h("select", null, v.contexts.map(x => h("option", null, x)));
+    memBox.replaceChildren(c.length ? h("div", { class: "list" }, c.map(x => h("div", { class: "item" }, h("span", { class: "grow" }, `«${x.wrong}» → «${x.right}»`), h("span", { class: "chip" }, x.scope + (x.n > 1 ? " · ×" + x.n : "")), h("button", { class: "small danger", onclick: async () => { await api("/api/corrections/" + x.id, { method: "DELETE" }); drawMem(); } }, "Rimuovi")))) : h("p", { class: "m" }, "Ancora nessuna correzione ricordata: si riempie da sola quando approvi correzioni dell'AI."),
+      h("div", { class: "row", style: "margin-top:8px" }, sc, w, r, h("button", { onclick: async () => { if (!w.value.trim() || !r.value.trim()) return; await api("/api/corrections", { json: { scope: sc.value, wrong: w.value, right: r.value } }); drawMem(); } }, "Aggiungi a mano")));
+  }
+  drawAI(); drawMem();
   $app.replaceChildren(h("h1", null, "Impostazioni"),
     h("h2", null, "Elaborazione"), h("div", { class: "grid g2" }, h("div", null, h("label", null, "Dispositivo di inferenza"), dev), h("div", null, h("label", null, "Trascrizioni in parallelo"), par, h("div", { class: "m" }, "Più lavori insieme condividono la stessa CPU: la velocità totale non aumenta molto, ma i file procedono tutti insieme. Con modelli diversi serve più RAM (l'app attende se non basta)."))),
     h("p", { class: "m" }, `CPU: ${sys.hardware.cpu_threads} thread · RAM ${sys.hardware.ram_gb} GB · GPU: ${sys.hardware.gpus.map(g => g.name + " " + g.vram_gb + "GB").join(", ") || "nessuna rilevata"}`),
@@ -85,6 +125,9 @@ ROUTES.push([/^#\/settings$/, async () => {
     h("p", { class: "m" }, "Le notifiche arrivano finché la pagina è aperta (anche in secondo piano). A app completamente chiusa il sistema non le consegna: la trascrizione però continua sul server e la trovi nell'archivio."),
     h("h2", null, "Vocabolario personalizzato"), h("div", { class: "row" }, h("div", { class: "grow" }, term), ctx, h("button", { class: "primary", onclick: async () => { if (!term.value.trim()) return; await api("/api/vocab", { json: { term: term.value, context: ctx.value } }); term.value = ""; drawV((await api("/api/vocab")).custom); } }, "Aggiungi")),
     h("p", { class: "m" }, "Usato per i suggerimenti di correzione nell'editor (parole molto simili a un tuo termine): li applichi tu con un clic, nessuna sostituzione automatica."), vbox,
+    h("h2", null, "Persone (archivi separati)"), h("p", { class: "m" }, "Ogni persona ha un codice e un archivio PRIVATO: nessuno, nemmeno tu, vede le registrazioni degli altri. I modelli sono condivisi (si scaricano una volta sola per tutti)."), peopleBox,
+    h("h2", null, "Correzione con AI (facoltativa, gratuita)"), aiBox,
+    h("h2", null, "Memoria delle correzioni"), h("p", { class: "m" }, "Le correzioni che approvi vengono ricordate per materia e riproposte nelle trascrizioni future (e date all'AI come esempio)."), memBox,
     h("h2", null, "Accesso"), tok,
     h("h2", null, "Sistema"), h("div", { class: "notice" }, `Dati in: ${sys.data_dir} · FFmpeg: ${sys.ffmpeg ? "ok" : "MANCANTE"} · LLM locali (Ollama): ${sys.llm_models.join(", ") || "nessuno"} · Riconoscimento parlanti: ${sys.diarization.available ? "installato" : sys.diarization.reason}`));
 }]);

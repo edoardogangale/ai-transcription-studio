@@ -35,7 +35,7 @@ def test_upload_metadata(client, wav):
 def test_exactly_three_models_per_language(client):
     for lang in ("it", "en"):
         r = client.get("/api/models", params={"language": lang}).json()
-        real = [m for m in r["models"] if m["id"] != "mock"]
+        real = [m for m in r["models"] if not m["id"].startswith("mock")]
         assert len(real) == 3, lang
         assert {"name", "installed", "compatible", "license", "verification", "benchmark"} <= real[0].keys()
     it = [m["id"] for m in client.get("/api/models?language=it").json()["models"]]
@@ -150,23 +150,13 @@ def test_compare_group(client, wav):
     m = upload(client, wav)
     r = client.post("/api/compare", json={"upload_id": m["upload_id"], "language": "en", "model_ids": ["mock"]})
     assert r.status_code == 400  # servono 2-3 modelli
-    # con un solo "mock" disponibile si simula il secondo ID registrando temporaneamente un alias
-    from app import registry
-    registry.MODELS["mock2"] = registry.MODELS["mock"] | {"name": "MOCK2"}
-    registry.BY_LANGUAGE["en"].append("mock2")
-    import app.adapters as ad
-    orig = ad.create
-    ad.create = lambda mid: orig("mock")
-    try:
-        r = client.post("/api/compare", json={"upload_id": m["upload_id"], "language": "en", "model_ids": ["mock", "mock2"]}).json()
-        for i in r["ids"]:
-            assert wait(client, i)["status"] == "done"
-        c = client.get(f"/api/compare/{r['group_id']}").json()
-        assert len(c["items"]) == 2 and c["diffs"] and c["diffs"][0]["summary"]["differences"] == 0
-        assert all(i["stats"]["elapsed_s"] is not None and i["word_count"] for i in c["items"])
-        assert "NON quale sia più accurato" in c["note"]
-    finally:
-        ad.create = orig
+    r = client.post("/api/compare", json={"upload_id": m["upload_id"], "language": "en", "model_ids": ["mock", "mock2"]}).json()
+    for i in r["ids"]:
+        assert wait(client, i)["status"] == "done"
+    c = client.get(f"/api/compare/{r['group_id']}").json()
+    assert len(c["items"]) == 2 and c["diffs"] and c["diffs"][0]["summary"]["differences"] > 0
+    assert all(i["stats"]["elapsed_s"] is not None and i["word_count"] for i in c["items"])
+    assert "NON quale sia più accurato" in c["note"]
 
 
 def test_cancel_and_resume(client, tmp_path, monkeypatch):

@@ -35,3 +35,15 @@ def wav(tmp_path_factory):
     p = tmp_path_factory.mktemp("aud") / "lezione è àccènti.wav"
     make_audio(p, [6, 7, 5, 9, 4])
     return p
+
+
+def pytest_addoption(parser):
+    parser.addoption("--slow", action="store_true", help="include il test su 190 minuti di audio")
+
+
+def pytest_collection_modifyitems(config, items):
+    if not config.getoption("--slow"):
+        skip = pytest.mark.skip(reason="usa --slow per eseguirlo")
+        for it in items:
+            if "slow" in it.keywords:
+                it.add_marker(skip)

@@ -83,8 +83,9 @@ if config.ENABLE_MOCK:  # SOLO TEST: finto adattatore per esercitare pipeline e 
                       "auto_language": True, "word_timestamps": True, "prompt_support": False, "cpu": True, "gpu": True,
                       "min_ram_gb": 0, "min_vram_gb": 0, "approx_download_gb": None, "benchmark": None,
                       "notes": "Testo fittizio generato dalla durata.", "verification": "Solo test."}
+    MODELS["mock2"] = MODELS["mock"] | {"name": "MOCK B (solo test, NON è un modello)"}
     for _l in BY_LANGUAGE.values():
-        _l.append("mock")
+        _l += ["mock", "mock2"]
 
 
 def model_dir(mid):

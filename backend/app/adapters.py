@@ -124,6 +124,9 @@ class MockAdapter(ASRAdapter):
     derivato dalla durata del campione per esercitare l'intera pipeline."""
     word_timestamps = True
 
+    def __init__(self, variant=False):
+        self.variant = variant  # "mock2": diverge in alcune parole, per testare il confronto
+
     def load(self, device):
         pass
 
@@ -133,13 +136,13 @@ class MockAdapter(ASRAdapter):
         self.calls = getattr(self, "calls", 0) + 1
         d = len(samples) / 16000
         n = max(3, int(d // 2))
-        words = [{"w": f"parola{i}", "s": round(i * d / n, 3), "e": round((i + 1) * d / n, 3)} for i in range(n)]
+        words = [{"w": f"parola{i}" if not (self.variant and i % 4 == 3) else f"parolina{i}", "s": round(i * d / n, 3), "e": round((i + 1) * d / n, 3)} for i in range(n)]
         return [{"start": 0.0, "end": round(d, 3), "text": " ".join(w["w"] for w in words), "words": words}]
 
 
 def create(mid):
     if mid.startswith("mock"):
-        return MockAdapter()
+        return MockAdapter(variant=mid == "mock2")
     fam = registry.MODELS[mid]["family"]
     if fam == "whisper":
         return WhisperAdapter()

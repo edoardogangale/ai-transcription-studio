@@ -1,0 +1,12 @@
+# Backend (Python 3.11+)
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+numpy>=1.26
+psutil>=5.9
+huggingface_hub>=0.30
+python-docx>=1.1
+reportlab>=4.0
+# Motori ASR
+faster-whisper>=1.1          # Whisper Large V3 (CTranslate2)
+onnx-asr[cpu,hub]>=0.10      # Parakeet TDT 0.6B v2/v3 (ONNX Runtime). Con GPU NVIDIA: sostituisci [cpu] con [gpu]

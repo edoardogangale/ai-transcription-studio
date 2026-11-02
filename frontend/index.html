@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AI Transcription Studio</title>
+<meta name="theme-color" content="#ffffff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="#/"><span class="logo">◖◗</span> Transcription Studio</a>
+  <nav>
+    <a href="#/" data-nav="">Archivio</a>
+    <a href="#/models" data-nav="models">Modelli AI</a>
+    <a href="#/settings" data-nav="settings">Impostazioni</a>
+  </nav>
+  <button id="themeBtn" class="icon-btn" title="Tema chiaro/scuro" aria-label="Cambia tema">◐</button>
+</header>
+<main id="app" aria-live="polite"></main>
+<div id="toast" role="status"></div>
+<script src="app.js"></script>
+</body>
+</html>

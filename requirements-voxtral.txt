@@ -1,6 +1,0 @@
-# OPZIONALE e SPERIMENTALE: solo per Mistral Voxtral Mini 4B Realtime (richiede GPU NVIDIA).
-# La versione di transformers che supporta Voxtral Realtime va verificata sulla model card ufficiale.
-torch
-transformers
-mistral-common[audio]
-accelerate

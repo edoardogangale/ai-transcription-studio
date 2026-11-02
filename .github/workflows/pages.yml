@@ -8,6 +8,8 @@ permissions: { contents: read, pages: write, id-token: write }
 concurrency: { group: pages, cancel-in-progress: true }
 jobs:
   deploy:
+    # finché il repository è privato GitHub Pages (piano gratuito) non è disponibile: il job viene saltato invece di fallire
+    if: ${{ !github.event.repository.private }}
     runs-on: ubuntu-latest
     environment: { name: github-pages, url: "${{ steps.d.outputs.page_url }}" }
     steps:

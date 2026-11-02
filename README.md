@@ -21,6 +21,21 @@ L'app ha due parti: i **modelli AI** girano su un computer/server (non nel brows
 
 *Limiti onesti*: i Codespaces gratuiti hanno una quota mensile di ore e spazio (l'ordine di grandezza è ~120 ore-core e ~15 GB al mese: **controlla** in GitHub → Settings → Billing, può cambiare); il Codespace si ferma dopo un po' di inattività e va ripreso; CPU a 4 core, niente GPU (quindi Parakeet/Turbo sì, Whisper Large V3 no). Questa strada **non è stata provata qui**: i file `.devcontainer` e gli script sono scritti e controllati nella parte che posso eseguire, ma non ho potuto avviare un vero Codespace.
 
+#### Far durare la quota gratuita di Codespaces
+GitHub conta le **ore-core** (una macchina da 4 core accesa 1 ora = 4 ore-core). Per un account gratuito l'ordine di grandezza che ricordo è **~120 ore-core e ~15 GB di spazio al mese** (**verificalo** su github.com/settings/billing → Codespaces: può cambiare). Quanto "costa" una lezione di 2 ore, dalle mie misure su 4 core (potrebbero differire sul loro hardware):
+| Modello | Tempo di calcolo | Ore-core consumate |
+|---|---|---|
+| Parakeet v3 | ~10 min | ~0,6 |
+| Whisper Turbo | ~1 ora | ~4 |
+| **Registrazione live di 2 h** | **2 ore (tutta la durata)** | **~8** |
+Quindi: **registra con Memo Vocali e carica il file dopo** (non col live per tutta la lezione), usa **Parakeet** di solito e Turbo solo quando serve, carica **più file insieme** e poi spegni. **Spegni il Codespace appena finito** (GitHub → Codespaces → ⋯ → Stop) e imposta il timeout di inattività al minimo (github.com/settings/codespaces → *Default idle timeout*): il tempo da fermo conta.
+
+#### Se la quota è finita
+1. **Aspetta il reset mensile**: i dati restano; esporta prima i PDF che ti servono (non puoi aprire l'app finché è spento).
+2. **Paga a consumo**: in Settings → Billing imposti tu un limite di spesa (di base è 0 €, quindi si blocca e basta). Il costo orario è basso ma controlla i prezzi attuali su GitHub.
+3. **Usa un computer** (di casa, di un compagno, della scuola): è gratis e senza limiti. Basta `./scripts/start.sh --lan`; i modelli si scaricano la prima volta.
+4. **Server gratuito sempre acceso** (avanzato): per esempio l'offerta "Always Free" di Oracle Cloud (VM ARM) con Docker (`docker compose up -d`). Richiede carta di credito per l'iscrizione e un po' di configurazione; **non l'ho provato** (né la compatibilità ARM). Servizi come Hugging Face Spaces o Colab gratuiti li sconsiglio: il disco si cancella a ogni riavvio, quindi dovresti riscaricare i modelli (e gli audio passerebbero da server altrui).
+
 ### B) Hai un computer (Mac/Windows/Linux) → lo avvii lì
 Requisiti: **Python 3.11+** e **FFmpeg** (`brew install ffmpeg` · `winget install Gyan.FFmpeg` · `sudo apt install ffmpeg`).
 ```bash

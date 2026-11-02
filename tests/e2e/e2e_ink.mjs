@@ -3,7 +3,7 @@ import { chromium, reporter } from "./lib.mjs";
 import http from "http"; import fs from "fs"; import path from "path";
 const [wav, shots] = process.argv.slice(2); const root = new URL("../../ondevice/", import.meta.url).pathname;
 const { ok, done } = reporter();
-const srv = http.createServer((q, r) => { let p = path.join(root, q.url.split("?")[0] === "/" ? "index.html" : q.url.split("?")[0]); if (!fs.existsSync(p)) { r.writeHead(404); return r.end(); } r.writeHead(200, { "content-type": { ".html": "text/html", ".js": "text/javascript", ".json": "application/json", ".png": "image/png" }[path.extname(p)] || "application/octet-stream" }); r.end(fs.readFileSync(p)); }).listen(8792);
+const srv = http.createServer((q, r) => { let p = path.join(root, q.url.split("?")[0] === "/" ? "index.html" : q.url.split("?")[0]); if (!fs.existsSync(p)) { r.writeHead(404); return r.end(); } r.writeHead(200, { "content-type": { ".html": "text/html", ".js": "text/javascript", ".json": "application/json", ".css": "text/css", ".png": "image/png" }[path.extname(p)] || "application/octet-stream" }); r.end(fs.readFileSync(p)); }).listen(8792);
 const FAKE = `export const env={}; const T=['oggi parliamo della rivoluzione francese','iniziata nel millesettecentottantanove','con la presa della Bastiglia']; let n=0; export async function pipeline(t,m,o){ o.progress_callback({file:'a',loaded:5,total:10}); return async (a)=>({text:T[(n++)%3]}); }`;
 const b = await chromium.launch({ args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", "--use-file-for-fake-audio-capture=" + wav] });
 const ctx = await b.newContext({ viewport: { width: 1366, height: 1024 }, hasTouch: true, permissions: ["microphone"], deviceScaleFactor: 2 });
@@ -16,9 +16,9 @@ async function draw(pts, hold = 0) { const s = await box(); await p.mouse.move(s
 async function touch(list) { // list di [tipo, id, x, y]
   await p.evaluate(list => { const st = document.querySelector(".ink-stage"), r = st.getBoundingClientRect(); for (const [type, id, x, y] of list) st.dispatchEvent(new PointerEvent(type, { pointerId: id, pointerType: "touch", isPrimary: id === 11, clientX: r.left + x, clientY: r.top + y, bubbles: true, cancelable: true })); }, list);
 }
-await p.goto("http://localhost:8792/"); await p.waitForSelector("text=+ Nuova pagina");
-await p.click("text=+ Nuova pagina"); await p.waitForSelector(".modal"); await p.click(".modal >> text=Quadretti"); ok("anteprima carta nel dialogo", await p.locator(".paperprev.grid").count() === 1);
-await p.click(".modal >> text=Righe"); await p.click(".modal >> text=Crea"); await p.waitForSelector(".ink-stage"); ok("pagina di appunti aperta", true);
+await p.goto("http://localhost:8792/"); await p.waitForSelector("text=Nuova nota");
+await p.click(".fab.new"); await p.waitForSelector(".modal"); await p.click(".modal .paper >> text=Quadretti"); ok("anteprima carta nel dialogo", await p.locator(".paper.on i.grid").count() === 1);
+await p.click(".modal .paper >> text=Righe"); await p.click(".modal >> text=Crea"); await p.waitForSelector(".ink-stage"); ok("pagina di appunti aperta", true);
 await draw([[200, 200], [260, 230], [320, 210], [380, 260]]); let pg = await cur(); ok("la penna (mouse) scrive", pg.strokes.length === 1, pg.strokes.length + " tratti");
 const c0 = await p.evaluate(() => 0); await touch([["pointerdown", 11, 500, 500], ["pointermove", 11, 500, 450], ["pointermove", 11, 500, 380], ["pointerup", 11, 500, 380]]);
 pg = await cur(); ok("il dito NON scrive (scorre)", pg.strokes.length === 1);
@@ -30,7 +30,8 @@ await draw(circ, 800); pg = await cur(); ok("cerchio storto → cerchio perfetto
 await draw([[200, 500], [300, 505], [400, 498], [500, 502], [470, 480], [500, 502], [470, 525]], 800); pg = await cur(); ok("freccia riconosciuta", pg.strokes.at(-1).shape === "freccia", pg.strokes.at(-1).shape);
 await draw([[200, 650], [350, 650], [350, 760], [200, 760], [202, 652]], 800); pg = await cur(); ok("rettangolo riconosciuto", pg.strokes.at(-1).shape === "rettangolo", pg.strokes.at(-1).shape);
 await draw([[700, 650], [800, 655], [900, 650]]); pg = await cur(); ok("senza fermarsi resta a mano libera", !pg.strokes.at(-1).shape);
-const s = await box(); await p.mouse.move(s.x + 900, s.y + 300); await p.mouse.down(); await p.waitForTimeout(800); const quick = await p.locator(".ink-quick").count(); await p.mouse.up(); ok("penna ferma appena appoggiata → strumenti rapidi", quick === 1);
+await p.mouse.move(100, 100); const s0 = await box(); await p.mouse.move(s0.x + 700, s0.y + 300); await p.mouse.down(); await p.waitForTimeout(900); await p.mouse.up(); ok("penna ferma a inizio tratto NON apre menu né blocca la scrittura", await p.locator(".ink-quick").count() === 0);
+await touch([["pointerdown", 11, 900, 300]]); await p.waitForTimeout(800); const quick = await p.locator(".ink-quick").count(); await touch([["pointerup", 11, 900, 300]]); ok("pressione lunga col dito → strumenti rapidi", quick === 1);
 await p.click(".ink-quick [aria-label=Evidenziatore]"); await draw([[180, 210], [400, 230]]); pg = await cur(); ok("evidenziatore dagli strumenti rapidi", pg.strokes.at(-1).t === "marker");
 const nBefore = pg.strokes.length; await p.click("[aria-label='Scambia strumento']"); await draw([[700, 640], [800, 670], [900, 640]]); pg = await cur(); ok("⇄ passa alla gomma e cancella", pg.strokes.length < nBefore, `${nBefore}→${pg.strokes.length}`);
 await p.click("[aria-label='Scambia strumento']"); ok("⇄ torna all'evidenziatore", await p.locator(".tool.on[aria-label=Evidenziatore]").count() === 1);
@@ -51,9 +52,9 @@ await p.evaluate(() => { const st = document.querySelector(".ink-stage"), r = st
 pg = await cur(); const pen = pg.strokes.at(-1); ok("matita inclinata = ombreggiatura (tratto largo)", pen.t === "pencil" && pen.pts[2] >= 1, pen.pts.slice(0, 3).join(","));
 if (shots) await p.screenshot({ path: shots + "/ink_page.png" });
 await p.click("[aria-label=Righello]");
-await p.click("[aria-label=Indietro]"); await p.waitForSelector(".pagecard"); ok("pagina in «Appunti» con anteprima", await p.locator(".pagecard").count() === 1);
+await p.click("[aria-label=Indietro]"); await p.waitForSelector(".nb canvas"); ok("pagina in «Appunti» con anteprima vera", await p.locator(".nb canvas").count() === 1);
 // live diviso: appunti + trascrizione animata
-await p.click("text=Registra e prendi appunti"); await p.waitForSelector("text=■ Stop", { timeout: 15000 }); ok("live: quaderno a tutto schermo, pannello laterale nascosto", await p.locator(".split .ink-stage").count() === 1 && !(await p.locator(".txpanel").isVisible()));
+await p.click(".fab.rec"); await p.waitForSelector("text=■ Stop", { timeout: 15000 }); ok("live: quaderno a tutto schermo, pannello laterale nascosto", await p.locator(".split .ink-stage").count() === 1 && !(await p.locator(".txpanel").isVisible()));
 await draw([[150, 300], [300, 320]]);
 await p.waitForSelector(".ink-text.transcript .w", { timeout: 25000 }); ok("la trascrizione si scrive DENTRO il foglio, parole animate", await p.locator(".ink-text.transcript .w").count() > 2);
 ok("paragrafi/orari in un altro colore", await p.locator(".ink-text.transcript .meta").count() >= 1 && await p.locator(".ink-text.transcript .meta").first().evaluate(e => getComputedStyle(e).color) !== await p.locator(".ink-text.transcript .spoken").first().evaluate(e => getComputedStyle(e).color));

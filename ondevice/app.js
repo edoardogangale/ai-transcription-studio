@@ -1,4 +1,4 @@
-import { createNotebook, INK_CSS, PAPERS, SIZES } from "./ink.js";
+import { createNotebook, INK_CSS, PAPERS, SIZES, renderThumb } from "./ink.js";
 // Trascrizione sul dispositivo: tutto gira nel browser (audio, modello, archivio). Nessun server.
 const MODELS = {
   "onnx-community/whisper-tiny": ["Tiny — velocissimo, qualità bassa", 40],
@@ -8,7 +8,7 @@ const MODELS = {
 };
 const LANGS = { italian: "Italiano", english: "English", auto: "Rileva da solo" };
 const $ = (s, r = document) => r.querySelector(s);
-function h(tag, attrs, ...kids) { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs || {})) { if (k === "class") e.className = v; else if (k.startsWith("on")) e.addEventListener(k.slice(2), v); else if (v !== false && v != null) e.setAttribute(k, v); } for (const k of kids.flat()) if (k != null && k !== false) e.append(k.nodeType ? k : document.createTextNode(k)); return e; }
+function h(tag, attrs, ...kids) { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs || {})) { if (k === "class") e.className = v; else if (k === "html") e.innerHTML = v; else if (k.startsWith("on")) e.addEventListener(k.slice(2), v); else if (v !== false && v != null) e.setAttribute(k, v); } for (const k of kids.flat()) if (k != null && k !== false) e.append(k.nodeType ? k : document.createTextNode(k)); return e; }
 const cfg = { get: (k, d) => { try { return localStorage.getItem("od_" + k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem("od_" + k, v); } catch {} } };
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 function toast(m) { const t = h("div", { class: "apptoast" }, m); document.body.append(t); setTimeout(() => t.remove(), 1800); }
@@ -93,13 +93,12 @@ async function route() {
   if (cleanup) { try { await cleanup(); } catch {} cleanup = null; }
   const [view, arg] = (location.hash || "#/").slice(2).split("/");
   app.replaceChildren(); app.classList.remove("full");
-  document.querySelectorAll(".topbar nav a").forEach(a => a.classList.toggle("active", a.dataset.nav === ((view === "note" || view === "page") ? "" : view)));
-  ({ "": home, rec, note: detail, test, import: importView, page: pageView }[view] || home)(arg);
+  const navKey = view === "note" ? "recs" : view === "page" ? "" : view === "test" ? "settings" : view; document.querySelectorAll("#side a").forEach(a => a.classList.toggle("active", a.dataset.nav === navKey));
+  ({ "": home, recs: recsView, rec, note: detail, test: settings, settings, import: importView, page: pageView }[view] || home)(arg);
 }
 addEventListener("hashchange", route);
 const modelSel = () => h("select", { "aria-label": "Modello", onchange: e => cfg.set("model", e.target.value) }, Object.entries(MODELS).map(([k, [n]]) => h("option", { value: k, selected: k === cfg.get("model", "onnx-community/whisper-small") }, n)));
 const langSel = () => h("select", { "aria-label": "Lingua", onchange: e => cfg.set("lang", e.target.value) }, Object.entries(LANGS).map(([k, n]) => h("option", { value: k, selected: k === cfg.get("lang", "italian") }, n)));
-function confirmBox(msg) { return new Promise(res => { const o = h("div", { style: "position:fixed;inset:0;background:#000a;display:flex;align-items:center;justify-content:center;padding:20px;z-index:9" }, h("div", { class: "card" }, h("p", null, msg), h("div", { class: "row" }, h("button", { class: "danger", onclick: () => { o.remove(); res(true); } }, "Elimina"), h("button", { onclick: () => { o.remove(); res(false); } }, "Annulla")))); document.body.append(o); }); }
 
 // ---------- appunti (pagine del quaderno) ----------
 const putPage = p => tx("pages", "readwrite", s => s.put(p));
@@ -110,32 +109,79 @@ function newPage(title, extra) {
   const sz = cfg.get("paper_size", "a4"), [, w, hgt] = SIZES[sz] || SIZES.a4;
   return { id: "p" + Date.now() + Math.random().toString(36).slice(2, 5), title, created: Date.now(), updated: Date.now(), w, h: hgt, paper: { type: cfg.get("paper_type", "lines"), gap: +cfg.get("paper_gap", "32"), color: "#ffffff", size: sz }, strokes: [], texts: [], ...(extra || {}) };
 }
+const ic = {
+  compose: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9a2.1 2.1 0 00-3-3L5 17z"/></svg>',
+  mic: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="7"/></svg>',
+  search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>',
+  back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>',
+  copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="3"/><path d="M16 8V6a2 2 0 00-2-2H6a2 2 0 00-2 2v8a2 2 0 002 2h2"/></svg>',
+  txt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M8 11l4 4 4-4M5 19h14"/></svg>',
+  share: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4M8 8l4-4 4 4M5 13v6a1 1 0 001 1h12a1 1 0 001-1v-6"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12M9 7V4h6v3"/></svg>',
+  note: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h8M8 16h4"/></svg>',
+  wave: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 10v4M8 6v12M12 3v18M16 8v8M20 11v2"/></svg>',
+  chev: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>',
+  cpu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>',
+  globe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg>',
+};
+const icon = (k, cls) => { const s = document.createElement("span"); s.className = cls || "ic"; s.style.display = "inline-flex"; s.innerHTML = ic[k]; return s; };
+const when = ts => { const d = new Date(ts), n = new Date(), diff = Math.round((new Date(n.getFullYear(), n.getMonth(), n.getDate()) - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 864e5); const hm = d.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }); return diff === 0 ? "Oggi, " + hm : diff === 1 ? "Ieri, " + hm : d.toLocaleDateString("it-IT", { day: "numeric", month: "short", year: d.getFullYear() === n.getFullYear() ? undefined : "numeric" }); };
+
+function sheet(content, { center = false } = {}) { // lastra stile iOS: si chiude toccando fuori
+  const o = h("div", { class: "modal" + (center ? " center" : ""), onclick: e => { if (e.target === o) { o.remove(); o.onclose && o.onclose(); } } }, h("div", { class: "sheet" }, content));
+  document.body.append(o); return o;
+}
+function confirmBox(msg, ok = "Elimina") { return new Promise(res => { const o = sheet([h("h3", null, msg), h("div", { class: "row" }, h("button", { class: "primary grow", style: "background:var(--bad);color:#fff", onclick: () => { o.remove(); res(true); } }, ok), h("button", { onclick: () => { o.remove(); res(false); } }, "Annulla"))], { center: true }); o.onclose = () => res(false); }); }
+function promptBox(title, value) { return new Promise(res => { const inp = h("input", { type: "text", value }); const o = sheet([h("h3", null, title), inp, h("div", { class: "row" }, h("button", { class: "primary grow", onclick: () => { o.remove(); res(inp.value.trim() || null); } }, "Salva"), h("button", { onclick: () => { o.remove(); res(null); } }, "Annulla"))], { center: true }); o.onclose = () => res(null); setTimeout(() => inp.select(), 50); inp.addEventListener("keydown", e => { if (e.key === "Enter") { o.remove(); res(inp.value.trim() || null); } }); }); }
 function newPageDialog() {
   return new Promise(res => {
     let type = cfg.get("paper_type", "lines"), size = cfg.get("paper_size", "a4"), gap = cfg.get("paper_gap", "32");
-    const seg = (vals, get, set) => { const d = h("div", { class: "segc" }); const draw = () => d.replaceChildren(...Object.entries(vals).map(([k, v]) => h("button", { class: get() === k ? "on" : "", onclick: () => { set(k); draw(); prev(); } }, Array.isArray(v) ? v[0] : v))); draw(); return d; };
-    const pv = h("div", { class: "paperprev" }); const prev = () => { pv.className = "paperprev " + type; pv.style.setProperty("--gap", (gap / 2.2) + "px"); const [, w, hh] = SIZES[size]; pv.style.aspectRatio = `${w}/${hh}`; };
-    const name = h("input", { type: "text", value: "Appunti " + new Date().toLocaleDateString("it-IT"), "aria-label": "Titolo" });
-    const o = h("div", { class: "modal" }, h("div", { class: "card sheet" }, h("h2", null, "Nuova pagina"), name,
-      h("div", { class: "mut" }, "Carta"), seg(PAPERS, () => type, v => type = v),
-      h("div", { class: "mut" }, "Formato"), seg(SIZES, () => size, v => size = v),
-      h("div", { class: "mut" }, "Distanza righe/quadretti"), seg({ 24: "Stretta", 32: "Media", 44: "Larga" }, () => gap, v => gap = v), pv,
-      h("div", { class: "row" }, h("button", { class: "primary", onclick: () => { cfg.set("paper_type", type); cfg.set("paper_size", size); cfg.set("paper_gap", gap); o.remove(); res(name.value.trim() || "Appunti"); } }, "Crea"), h("button", { onclick: () => { o.remove(); res(null); } }, "Annulla"))));
-    document.body.append(o); prev();
+    const papers = h("div", { class: "papers" }), sizes = h("div", { class: "chips" }), gaps = h("div", { class: "chips" });
+    const draw = () => {
+      papers.replaceChildren(...Object.entries(PAPERS).map(([k, v]) => h("button", { class: "paper" + (type === k ? " on" : ""), onclick: () => { type = k; draw(); } }, h("i", { class: k }), v)));
+      sizes.replaceChildren(...Object.entries(SIZES).map(([k, v]) => h("button", { class: "chip" + (size === k ? " on" : ""), onclick: () => { size = k; draw(); } }, v[0])));
+      gaps.replaceChildren(...Object.entries({ 24: "Stretta", 32: "Media", 44: "Larga" }).map(([k, v]) => h("button", { class: "chip" + (gap === k ? " on" : ""), onclick: () => { gap = k; draw(); } }, v)));
+    };
+    const name = h("input", { type: "text", value: "Nota " + new Date().toLocaleDateString("it-IT", { day: "numeric", month: "long" }), "aria-label": "Titolo" });
+    const o = sheet([h("h3", null, "Nuova nota"), name, h("label", { class: "l" }, "Carta"), papers, h("label", { class: "l" }, "Formato"), sizes, h("label", { class: "l" }, "Distanza delle righe"), gaps,
+      h("div", { class: "row" }, h("button", { class: "primary grow", onclick: () => { cfg.set("paper_type", type); cfg.set("paper_size", size); cfg.set("paper_gap", gap); o.remove(); res({ title: name.value.trim() || "Nota", type, size, gap: +gap }); } }, "Crea"), h("button", { onclick: () => { o.remove(); res(null); } }, "Annulla"))]);
+    o.onclose = () => res(null); draw();
   });
 }
+async function createFromDialog() { const r = await newPageDialog(); if (!r) return; const p = newPage(r.title); p.paper.type = r.type; p.paper.gap = r.gap; const [, w, hh] = SIZES[r.size]; p.w = w; p.h = hh; p.paper.size = r.size; await putPage(p); go("#/page/" + p.id); }
 
 async function home() {
-  const list = h("div"), pages = h("div", { class: "pages" });
-  app.append(h("h1", null, "Trascrizione sul dispositivo"), h("div", { class: "mut" }, "Tutto resta su questo iPad. Nessun server, nessun account."),
-    h("div", { class: "card" }, h("div", { class: "row" }, h("div", { class: "grow" }, "Modello"), modelSel()), h("div", { class: "row" }, h("div", { class: "grow" }, "Lingua"), langSel()),
-      h("div", { class: "row" }, h("button", { class: "primary", onclick: () => go("#/rec") }, "● Registra e prendi appunti"), h("button", { onclick: () => go("#/import") }, "Carica un audio"), h("button", { onclick: () => go("#/test") }, "Test dispositivo"))),
-    h("div", { class: "row" }, h("h2", { class: "grow" }, "Appunti"), h("button", { class: "primary", onclick: async () => { const t = await newPageDialog(); if (!t) return; const p = newPage(t); await putPage(p); go("#/page/" + p.id); } }, "+ Nuova pagina")), pages,
-    h("h2", null, "Registrazioni"), list);
-  const ps = await allPages();
-  pages.replaceChildren(...(ps.length ? ps.map(p => h("button", { class: "pagecard", onclick: () => go("#/page/" + p.id) }, h("div", { class: "thumb paperprev " + (p.paper?.type || "lines") }), h("b", null, p.title), h("span", { class: "mut" }, new Date(p.updated || p.created).toLocaleDateString("it-IT") + (p.noteId ? " · 🎙" : "")))) : [h("div", { class: "mut" }, "Nessuna pagina. Crea una pagina o registra una lezione: gli appunti si creano da soli.")]));
-  const notes = await allNotes();
-  list.replaceChildren(...(notes.length ? notes.map(n => h("div", { class: "card item", onclick: () => go("#/note/" + n.id), style: "cursor:pointer" }, h("b", null, n.title), h("div", { class: "mut" }, `${new Date(n.created).toLocaleString("it-IT")} · ${fmt(n.duration || 0)} · ${(MODELS[n.model] || [n.model])[0].split(" — ")[0]}${n.status !== "done" ? " · interrotta" : ""}`))) : [h("div", { class: "mut" }, "Ancora nulla. Premi «Registra e prendi appunti».")]));
+  const grid = h("div", { class: "grid" }); let all = [];
+  const q = h("input", { type: "search", placeholder: "Cerca negli appunti", "aria-label": "Cerca" });
+  const draw = () => {
+    const term = q.value.trim().toLowerCase(), ps = all.filter(p => !term || (p.title || "").toLowerCase().includes(term) || (p.texts || []).some(t => (t.text || "").toLowerCase().includes(term)));
+    if (!ps.length) { grid.className = ""; grid.replaceChildren(h("div", { class: "empty" }, icon("note"), h("b", null, term ? "Nessun risultato" : "Nessuna nota"), term ? "Prova con un'altra parola." : "Tocca «Nuova nota» per scrivere con la Pencil, oppure «Registra» per trascrivere una lezione.")); return; }
+    grid.className = "grid";
+    grid.replaceChildren(...ps.map((p, i) => {
+      const cv = h("div", { class: "cover" });
+      const b = h("div", { class: "nb", style: `animation-delay:${Math.min(i, 12) * 35}ms`, role: "button", tabindex: "0", onclick: () => go("#/page/" + p.id) }, cv, h("b", null, p.title || "Senza titolo"), h("span", { class: "m" }, when(p.updated || p.created)),
+        h("button", { class: "more", "aria-label": "Altro", onclick: e => { e.stopPropagation(); pageMenu(p); } }, "⋯"));
+      if (p.noteId) cv.append(h("span", { class: "badge" }, "● lezione"));
+      requestAnimationFrame(() => { try { cv.prepend(renderThumb(p, 200)); } catch (e) { console.error("thumb", e.message); } });
+      return b;
+    }));
+  };
+  const pageMenu = p => { const o = sheet([h("h3", null, p.title || "Nota"), h("div", { class: "group" },
+    h("button", { class: "cell", onclick: async () => { o.remove(); const t = await promptBox("Rinomina", p.title); if (t) { p.title = t; await putPage(p); draw(); } } }, h("div", { class: "grow" }, "Rinomina")),
+    h("button", { class: "cell danger", onclick: async () => { o.remove(); if (await confirmBox("Eliminare questa nota?")) { await delPage(p.id); all = all.filter(x => x.id !== p.id); draw(); } } }, h("div", { class: "grow" }, "Elimina")))], { center: true }); };
+  app.append(h("h1", null, "Appunti"), h("div", { class: "sub" }, "Scrivi con la Apple Pencil e trascrivi le lezioni, tutto su questo iPad."),
+    h("div", { class: "search" }, icon("search"), q), grid,
+    h("div", { class: "fabs" }, h("button", { class: "fab rec", onclick: () => go("#/rec") }, icon("mic"), "Registra"), h("button", { class: "fab new", onclick: createFromDialog }, icon("compose"), "Nuova nota")));
+  q.addEventListener("input", draw); all = await allPages(); draw();
+}
+
+async function recsView() {
+  const list = h("div", { class: "group" }), notes = await allNotes();
+  app.append(h("h1", null, "Registrazioni"), h("div", { class: "sub" }, notes.length ? `${notes.length} ${notes.length === 1 ? "registrazione" : "registrazioni"}` : "Le lezioni registrate compaiono qui."),
+    notes.length ? list : h("div", { class: "empty" }, icon("wave"), h("b", null, "Nessuna registrazione"), "Premi «Registra» per trascrivere una lezione."),
+    h("div", { class: "fabs" }, h("button", { class: "fab rec", onclick: () => go("#/rec") }, icon("mic"), "Registra")));
+  list.replaceChildren(...notes.map(n => h("button", { class: "cell", onclick: () => go("#/note/" + n.id) }, h("span", { class: "ico", style: "background:var(--rec)", html: ic.wave }),
+    h("div", { class: "grow" }, h("div", { class: "t" }, n.title), h("div", { class: "m" }, `${when(n.created)} · ${fmt(n.duration || 0)} · ${(MODELS[n.model] || [n.model])[0].split(" — ")[0]}${n.status !== "done" ? " · interrotta" : ""}`)), h("span", { class: "chev", html: ic.chev }))));
 }
 
 // trascrizione: il testo detto è nero; ciò che aggiunge l'app (orari, paragrafi, avvisi) è viola e corsivo
@@ -223,27 +269,27 @@ async function importView() {
 }
 
 async function detail(id) {
-  const n = await getNote(id); if (!n) return go("#/");
-  const title = h("input", { type: "text", value: n.title, onchange: async () => { n.title = title.value; await putNote(n); } });
+  const n = await getNote(id); if (!n) return go("#/recs");
+  const title = h("input", { type: "text", class: "titlein", value: n.title, "aria-label": "Titolo", onchange: async () => { n.title = title.value; await putNote(n); } });
   const text = n.segments.map(s => s.text).join(" ");
-  const aud = h("div");
   const blobs = await getAudio(id); const blob = blobs.length ? new Blob(blobs, { type: n.mime || "audio/mp4" }) : null;
   const ext = (n.mime || "").includes("webm") ? "webm" : (n.mime || "").includes("wav") ? "wav" : "m4a";
-  if (blob) { const url = URL.createObjectURL(blob); cleanup = () => URL.revokeObjectURL(url); aud.append(h("audio", { controls: "", src: url, style: "width:100%" })); }
+  let aud = null; if (blob) { const url = URL.createObjectURL(blob); cleanup = () => URL.revokeObjectURL(url); aud = h("div", { class: "card" }, h("audio", { controls: "", src: url })); }
   const dl = (b, name) => { const a = h("a", { href: URL.createObjectURL(b), download: name }); document.body.append(a); a.click(); a.remove(); };
   const file = blob && new File([blob], `${n.title}.${ext}`, { type: blob.type });
   const tv = transcriptView(); tv.el.classList.add("static"); n.segments.forEach(s => tv.add(s, false));
   const page = n.pageId && await getPage(n.pageId);
-  app.append(h("div", { class: "row" }, h("button", { onclick: () => go("#/") }, "← Indietro")), title,
-    h("div", { class: "mut" }, `${new Date(n.created).toLocaleString("it-IT")} · ${fmt(n.duration || 0)}${n.status !== "done" ? " · registrazione interrotta (testo parziale)" : ""}`), aud,
-    h("div", { class: "row" },
-      page && h("button", { class: "primary", onclick: () => go("#/page/" + page.id) }, "✎ Apri gli appunti"),
-      h("button", { onclick: async () => { try { await navigator.clipboard.writeText(text); toast("Testo copiato"); } catch { prompt("Copia il testo:", text); } } }, "Copia testo"),
-      h("button", { onclick: () => dl(new Blob([text], { type: "text/plain" }), n.title + ".txt") }, "Scarica .txt"),
-      blob && h("button", { onclick: async () => { try { if (navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file], title: n.title }); else dl(blob, file.name); } catch {} } }, "Condividi audio"),
-      h("button", { class: "danger", onclick: async () => { if (await confirmBox("Eliminare questa registrazione e il suo audio?" + (page ? " Gli appunti scritti restano in «Appunti»." : ""))) { await delNote(id); go("#/"); } } }, "Elimina")),
-    h("div", { class: "card" }, n.segments.length ? tv.el : h("div", { class: "mut" }, "Nessun testo.")),
-    h("div", { class: "mut" }, "Per la qualità massima: condividi l'audio e ritrascrivilo con l'app server (modelli grandi, parlanti, correzione AI)."));
+  const pill = (k, label, fn, cls) => h("button", { class: cls || "", onclick: fn }, icon(k), label);
+  app.append(h("button", { class: "back", onclick: () => go("#/recs") }, icon("back"), "Registrazioni"), title,
+    h("div", { class: "sub" }, `${when(n.created)} · ${fmt(n.duration || 0)}${n.status !== "done" ? " · registrazione interrotta (testo parziale)" : ""}`), aud,
+    h("div", { class: "pills" },
+      page && pill("compose", "Apri gli appunti", () => go("#/page/" + page.id), "primary"),
+      pill("copy", "Copia testo", async () => { try { await navigator.clipboard.writeText(text); toast("Testo copiato"); } catch { prompt("Copia il testo:", text); } }),
+      pill("txt", "Scarica .txt", () => dl(new Blob([text], { type: "text/plain" }), n.title + ".txt")),
+      blob && pill("share", "Condividi audio", async () => { try { if (navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file], title: n.title }); else dl(blob, file.name); } catch {} }),
+      pill("trash", "Elimina", async () => { if (await confirmBox("Eliminare questa registrazione e il suo audio?" + (page ? " Gli appunti scritti restano in «Appunti»." : ""))) { await delNote(id); go("#/recs"); } }, "danger")),
+    h("div", { class: "card transcript" }, n.segments.length ? tv.el : h("div", { class: "mut" }, "Nessun testo.")),
+    h("div", { class: "mut", style: "padding:0 6px" }, "Per la qualità massima: condividi l'audio e ritrascrivilo con l'app server (modelli grandi, parlanti, correzione AI)."));
 }
 
 async function pageView(id) {
@@ -251,25 +297,27 @@ async function pageView(id) {
   app.classList.add("full");
   const title = h("input", { type: "text", class: "ptitle", value: p.title, "aria-label": "Titolo", onchange: () => { p.title = title.value; putPage(p); } });
   const head = h("div", { class: "rechead" }, h("button", { class: "ib", "aria-label": "Indietro", onclick: () => go("#/") }, "‹"), title,
-    p.noteId && h("button", { class: "ib small", onclick: () => go("#/note/" + p.noteId) }, "🎙"),
-    h("button", { class: "ib small", "aria-label": "Elimina pagina", onclick: async () => { if (await confirmBox("Eliminare questa pagina di appunti?")) { p._deleted = true; await delPage(id); go("#/"); } } }, "🗑"));
+    p.noteId && h("button", { class: "ib small", "aria-label": "Apri la registrazione", onclick: () => go("#/note/" + p.noteId) }, "🎙"),
+    h("button", { class: "ib small", "aria-label": "Elimina pagina", onclick: async () => { if (await confirmBox("Eliminare questa nota?")) { p._deleted = true; await delPage(id); go("#/"); } } }, "🗑"));
   const host = h("div", { class: "nbhost solo" }); app.append(host);
   const nb = createNotebook(host, p, { header: head, onChange: x => { if (!x._deleted) putPage(x); } });
   cleanup = () => { nb.destroy(); app.classList.remove("full"); };
 }
 
-async function test() {
-  const out = h("div", { class: "card" }), box = h("div");
-  const line = (ok, t) => out.append(h("div", { class: ok ? "ok" : "bad" }, (ok ? "✓ " : "✗ ") + t));
-  line(!!navigator.gpu, navigator.gpu ? "WebGPU disponibile (modelli veloci)" : "WebGPU non disponibile: si usa la CPU, più lenta (meglio Tiny/Base/Small)");
-  line(!!navigator.mediaDevices?.getUserMedia, "Microfono (richiede https)");
-  line(!!window.MediaRecorder, "Salvataggio audio");
-  line(!!navigator.wakeLock, "Schermo sempre acceso durante la registrazione");
-  line(!!(navigator.storage && navigator.storage.persist), "Archivio persistente");
-  try { const e = await navigator.storage.estimate(); out.append(h("div", { class: "mut" }, `Spazio disponibile: ~${Math.round((e.quota - e.usage) / 1e9)} GB`)); } catch {}
+async function settings() {
+  const out = h("div", { class: "group" }), box = h("div"), r = h("div", { class: "mut", style: "padding:8px 12px" });
+  const chk = (ok, t) => h("div", { class: "cell" }, h("span", { class: "chk" }, h("span", { class: "d" + (ok ? "" : " no") }, ok ? "✓" : "✕")), h("div", { class: "grow" }, t));
+  out.append(chk(!!navigator.gpu, navigator.gpu ? "GPU (WebGPU): modelli veloci" : "GPU non disponibile: userà la CPU, più lenta"), chk(!!navigator.mediaDevices?.getUserMedia, "Microfono (serve https)"), chk(!!window.MediaRecorder, "Salvataggio dell'audio"), chk(!!navigator.wakeLock, "Schermo acceso durante la registrazione"));
+  try { const e = await navigator.storage.estimate(); out.append(h("div", { class: "cell" }, h("div", { class: "grow" }, "Spazio disponibile"), h("span", { class: "mut" }, `~${Math.round((e.quota - e.usage) / 1e9)} GB`))); } catch {}
   try { await navigator.storage.persist(); } catch {}
-  const r = h("div", { class: "mut" });
-  app.append(h("h1", null, "Test dispositivo"), out, box, r, h("div", { class: "row" }, modelSel(), h("button", { class: "primary", onclick: async e => { e.target.disabled = true; const t = performance.now(); loadUI(box); try { await Engine.load(cfg.get("model", "onnx-community/whisper-small")); r.textContent = `Modello caricato in ${((performance.now() - t) / 1000).toFixed(1)} s su ${Engine.device === "webgpu" ? "GPU" : "CPU"}. La velocità vera si vede nel «Ritardo trascrizione» durante la registrazione: se cresce, scegli un modello più piccolo.`; } catch (err) { r.replaceChildren(h("span", { class: "bad" }, "Errore: " + err.message)); } e.target.disabled = false; } }, "Scarica e prova il modello"), h("button", { onclick: () => go("#/") }, "Indietro")));
+  const test = h("button", { class: "primary", onclick: async e => { e.target.disabled = true; const t = performance.now(); loadUI(box); try { await Engine.load(cfg.get("model", "onnx-community/whisper-small")); r.textContent = `Modello caricato in ${((performance.now() - t) / 1000).toFixed(1)} s su ${Engine.device === "webgpu" ? "GPU" : "CPU"}. La velocità vera si vede in registrazione: se compare «ritardo» che cresce, scegli un modello più piccolo.`; r.className = "ok"; } catch (err) { r.replaceChildren(h("span", { class: "bad" }, "Errore: " + err.message)); } e.target.disabled = false; } }, "Scarica e prova il modello");
+  app.append(h("h1", null, "Impostazioni"), h("div", { class: "sub" }, "Il modello si scarica una sola volta e resta sull'iPad."),
+    h("h2", null, "Trascrizione"), h("div", { class: "group" },
+      h("div", { class: "cell" }, h("span", { class: "ico", html: ic.cpu }), h("div", { class: "grow" }, "Modello"), modelSel()),
+      h("div", { class: "cell" }, h("span", { class: "ico", style: "background:#34a853", html: ic.globe }), h("div", { class: "grow" }, "Lingua"), langSel())),
+    h("div", { class: "row", style: "margin:12px 0" }, test), box, r,
+    h("h2", null, "Questo iPad"), out,
+    h("h2", null, "Privacy"), h("div", { class: "card mut" }, "Audio, testi e appunti restano nell'archivio del browser di questo iPad. Nessun server, nessun account. Se cancelli i dati di Safari per questo sito, l'archivio si cancella: condividi l'audio o copia il testo di ciò che vuoi conservare."));
 }
 
 document.head.append(h("style", null, INK_CSS));

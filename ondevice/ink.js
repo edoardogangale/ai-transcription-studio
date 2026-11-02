@@ -103,6 +103,7 @@ function inPoly(x, y, poly) { let ins = false; for (let i = 0, j = poly.length -
 
 // ---------- riconoscimento delle forme (tieni ferma la penna a fine tratto) ----------
 function rdp(P, eps) { if (P.length < 3) return P; let dm = 0, k = 0; const [a, b] = [P[0], P[P.length - 1]]; for (let i = 1; i < P.length - 1; i++) { const d = segDist(P[i][0], P[i][1], a[0], a[1], b[0], b[1]); if (d > dm) { dm = d; k = i; } } if (dm > eps) { const l = rdp(P.slice(0, k + 1), eps), r = rdp(P.slice(k), eps); return l.slice(0, -1).concat(r); } return [a, b]; }
+const plenFlat = a => { let s = 0; for (let i = 3; i < a.length; i += 3) s += Math.hypot(a[i] - a[i - 3], a[i + 1] - a[i - 2]); return s; };
 const plen = P => { let s = 0; for (let i = 1; i < P.length; i++) s += Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]); return s; };
 const flat = (P, p = 0.6) => P.flatMap(q => [q[0], q[1], p]);
 function densify(P, step = 6) { const o = [P[0]]; for (let i = 1; i < P.length; i++) { const [ax, ay] = P[i - 1], [bx, by] = P[i]; const n = Math.max(1, Math.round(Math.hypot(bx - ax, by - ay) / step)); for (let k = 1; k <= n; k++) o.push([ax + (bx - ax) * k / n, ay + (by - ay) * k / n]); } return o; }
@@ -179,10 +180,10 @@ function drawPaper(ctx, page, vx0, vy0, vx1, vy1, z) {
 // ---------- il quaderno ----------
 export function createNotebook(host, page, opts = {}) {
   page.strokes ||= []; page.texts ||= []; page.paper ||= { type: "lines", gap: 32, color: "#ffffff" }; page.w ||= 820; page.h ||= 1160;
-  const st = { tool: localStorage.getItem("ink_tool") || "pen", prev: "eraser", colors: {}, sizes: {}, eraserMode: localStorage.getItem("ink_er") || "object", fingerDraw: localStorage.getItem("ink_finger") === "1", ruler: null };
+  const st = { shapes: localStorage.getItem("ink_shapes") !== "0", tool: localStorage.getItem("ink_tool") || "pen", prev: "eraser", colors: {}, sizes: {}, eraserMode: localStorage.getItem("ink_er") || "object", fingerDraw: localStorage.getItem("ink_finger") === "1", ruler: null };
   try { Object.assign(st.colors, JSON.parse(localStorage.getItem("ink_colors") || "{}")); Object.assign(st.sizes, JSON.parse(localStorage.getItem("ink_sizes") || "{}")); } catch {}
   const colorOf = t => st.colors[t] || (t === "marker" ? HL_COLORS[0] : COLORS[0]), sizeOf = t => st.sizes[t] || TOOLS[t][1];
-  const persist = () => { try { localStorage.setItem("ink_tool", st.tool); localStorage.setItem("ink_colors", JSON.stringify(st.colors)); localStorage.setItem("ink_sizes", JSON.stringify(st.sizes)); localStorage.setItem("ink_er", st.eraserMode); localStorage.setItem("ink_finger", st.fingerDraw ? "1" : "0"); } catch {} };
+  const persist = () => { try { localStorage.setItem("ink_tool", st.tool); localStorage.setItem("ink_colors", JSON.stringify(st.colors)); localStorage.setItem("ink_sizes", JSON.stringify(st.sizes)); localStorage.setItem("ink_er", st.eraserMode); localStorage.setItem("ink_finger", st.fingerDraw ? "1" : "0"); localStorage.setItem("ink_shapes", st.shapes ? "1" : "0"); } catch {} };
 
   const root = el("div", { class: "ink" });
   const stage = el("div", { class: "ink-stage" });
@@ -192,7 +193,7 @@ export function createNotebook(host, page, opts = {}) {
   stage.append(bg, textLayer, live, toast);
   const top = el("div", { class: "ink-top" }), bar = el("div", { class: "ink-bar" });
   root.append(top, stage, bar); host.append(root);
-  const bctx = bg.getContext("2d"), lctx = live.getContext("2d");
+  const bctx = bg.getContext("2d", { alpha: false }), lctx = live.getContext("2d", { desynchronized: true });
   let W = 0, H = 0, cam = { z: 1, tx: 0, ty: 0 }, dirty = true, raf = 0;
 
   // ----- annulla / ripristina -----
@@ -202,7 +203,7 @@ export function createNotebook(host, page, opts = {}) {
   const pushUndo = () => { undoS.push(snap()); if (undoS.length > 80) undoS.shift(); redoS.length = 0; updUndo(); };
   const undo = () => { if (!undoS.length) return; redoS.push(snap()); restore(undoS.pop()); updUndo(); say("Annullato"); };
   const redo = () => { if (!redoS.length) return; undoS.push(snap()); restore(redoS.pop()); updUndo(); say("Ripristinato"); };
-  let saveT = 0; const changed = () => { dirty = true; schedule(); page.updated = Date.now(); clearTimeout(saveT); saveT = setTimeout(() => opts.onChange && opts.onChange(page), 600); };
+  let saveT = 0; const changed = (inval = true) => { if (inval) invalidateAll(); dirty = true; schedule(); page.updated = Date.now(); clearTimeout(saveT); saveT = setTimeout(() => opts.onChange && opts.onChange(page), 600); };
   const say = (m) => { toast.textContent = m; toast.classList.add("show"); clearTimeout(say.t); say.t = setTimeout(() => toast.classList.remove("show"), 1200); };
 
   // ----- camera -----
@@ -220,20 +221,56 @@ export function createNotebook(host, page, opts = {}) {
   }
   function schedule() { if (!raf) raf = requestAnimationFrame(frame); }
   function frame() { raf = 0; if (dirty) { drawBg(); dirty = false; } drawLive(); applyTextCam(); }
+  // Il foglio (carta + tratti) è disegnato UNA volta in tessere bitmap; pan e zoom ricompongono solo poche immagini
+  // (costo trascurabile): i tratti non vengono ridisegnati a ogni fotogramma, quindi lo scorrimento segue il display (120 Hz).
+  const TILE = 512, SCALES = [0.5, 0.75, 1, 1.5, 2, 3], tiles = new Map(); let tilePx = 0, hidden = null;
+  const MAXPX = 70e6;
+  const pickScale = () => { const need = cam.z * dpr(); for (const s of SCALES) if (s >= need - 1e-6) return s; return 0; };
+  function invalidateAll() { tiles.clear(); tilePx = 0; }
+  function renderTile(ts, i, j) {
+    const px = Math.ceil(TILE * ts), c = document.createElement("canvas"); c.width = c.height = px; const x = c.getContext("2d");
+    x.setTransform(ts, 0, 0, ts, -i * TILE * ts, -j * TILE * ts);
+    const x0 = i * TILE, y0 = j * TILE, x1 = x0 + TILE, y1 = y0 + TILE;
+    x.save(); x.beginPath(); x.rect(0, 0, page.w, page.h); x.clip(); drawPaper(x, page, x0, y0, x1, y1, ts);
+    for (const s of page.strokes) { const [a, b, cc, e] = s.bb, m = s.s * 3 + 2; if (cc + m < x0 || a - m > x1 || e + m < y0 || b - m > y1) continue; if (hidden && hidden.has(s.id)) continue; drawStroke(x, s); }
+    x.restore(); const tile = { c, x, ts, i, j, px }; tiles.set(`${ts}:${i}:${j}`, tile); tilePx += px * px;
+    for (const [k, v] of tiles) { if (tilePx <= MAXPX) break; if (k === `${ts}:${i}:${j}`) continue; tiles.delete(k); tilePx -= v.px * v.px; }
+    return tile;
+  }
+  function addToTiles(s) { // un tratto nuovo si aggiunge alle tessere già pronte, senza ridisegnare il resto
+    const [a, b, cc, e] = s.bb, m = s.s * 3 + 2;
+    for (const tl of tiles.values()) { const x0 = tl.i * TILE, y0 = tl.j * TILE; if (cc + m < x0 || a - m > x0 + TILE || e + m < y0 || b - m > y0 + TILE) continue; tl.x.save(); tl.x.beginPath(); tl.x.rect(0, 0, page.w, page.h); tl.x.clip(); drawStroke(tl.x, s); tl.x.restore(); }
+  }
   function drawBg() {
     const d = dpr(); bctx.setTransform(1, 0, 0, 1, 0, 0); bctx.fillStyle = "#d8d8dd"; bctx.fillRect(0, 0, bg.width, bg.height);
     bctx.setTransform(d * cam.z, 0, 0, d * cam.z, d * cam.tx, d * cam.ty);
     const [vx0, vy0] = toPage(0, 0), [vx1, vy1] = toPage(W, H);
     bctx.save(); bctx.shadowColor = "rgba(0,0,0,.18)"; bctx.shadowBlur = 14 * cam.z; bctx.fillStyle = "#fff"; bctx.fillRect(0, 0, page.w, page.h); bctx.restore();
-    bctx.save(); bctx.beginPath(); bctx.rect(0, 0, page.w, page.h); bctx.clip();
-    drawPaper(bctx, page, vx0, vy0, vx1, vy1, cam.z);
-    for (const s of page.strokes) { const [a, b, c, e] = s.bb, m = s.s * 3; if (c + m < vx0 || a - m > vx1 || e + m < vy0 || b - m > vy1) continue; if (sel && drag && sel.ids.has(s.id)) continue; drawStroke(bctx, s); }
-    bctx.restore();
+    const ts = pickScale();
+    if (!ts) { // zoom estremo: ridisegno vettoriale diretto
+      bctx.save(); bctx.beginPath(); bctx.rect(0, 0, page.w, page.h); bctx.clip(); drawPaper(bctx, page, vx0, vy0, vx1, vy1, cam.z);
+      for (const s of page.strokes) { const [a, b, c, e] = s.bb, m = s.s * 3; if (c + m < vx0 || a - m > vx1 || e + m < vy0 || b - m > vy1) continue; if (hidden && hidden.has(s.id)) continue; drawStroke(bctx, s); }
+      bctx.restore(); return;
+    }
+    bctx.setTransform(1, 0, 0, 1, 0, 0);
+    const i0 = Math.max(0, Math.floor(vx0 / TILE)), i1 = Math.min(Math.floor((page.w - 0.01) / TILE), Math.floor(vx1 / TILE));
+    const j0 = Math.max(0, Math.floor(vy0 / TILE)), j1 = Math.min(Math.floor((page.h - 0.01) / TILE), Math.floor(vy1 / TILE));
+    let budget = 8, more = false; const t0 = performance.now();
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      const k = `${ts}:${i}:${j}`; let tl = tiles.get(k);
+      if (tl) { tiles.delete(k); tiles.set(k, tl); }
+      else if (budget > 0 && performance.now() - t0 < 10) { tl = renderTile(ts, i, j); budget--; }
+      else { more = true; for (const s2 of SCALES) { tl = tiles.get(`${s2}:${i}:${j}`); if (tl) break; } }
+      const wpx = Math.min(TILE, page.w - i * TILE), hpx = Math.min(TILE, page.h - j * TILE);
+      const dx = (i * TILE * cam.z + cam.tx) * d, dy = (j * TILE * cam.z + cam.ty) * d, dw = wpx * cam.z * d, dh = hpx * cam.z * d;
+      if (tl) bctx.drawImage(tl.c, 0, 0, wpx * tl.ts, hpx * tl.ts, dx, dy, dw + 0.7, dh + 0.7);
+    }
+    if (more) { dirty = true; schedule(); }
   }
   function drawLive() {
     const d = dpr(); lctx.setTransform(1, 0, 0, 1, 0, 0); lctx.clearRect(0, 0, live.width, live.height);
     lctx.setTransform(d * cam.z, 0, 0, d * cam.z, d * cam.tx, d * cam.ty);
-    if (cur && cur.pts.length) drawStroke(lctx, cur);
+    if (cur && cur.pts.length) drawStroke(lctx, curPred.length ? { ...cur, pts: cur.pts.concat(curPred) } : cur);
     if (sel) {
       if (drag) for (const s of page.strokes) if (sel.ids.has(s.id)) drawStroke(lctx, s, drag.dx, drag.dy);
       const [a, b, c, e] = selBox(); const ox = drag ? drag.dx : 0, oy = drag ? drag.dy : 0;
@@ -347,7 +384,7 @@ export function createNotebook(host, page, opts = {}) {
       }
       page.strokes = out;
     }
-    if (hit) changed();
+    if (hit) { invalidateAll(); changed(false); }
   }
 
   // ----- input: Pencil scrive, dito scorre/zooma -----
@@ -358,7 +395,8 @@ export function createNotebook(host, page, opts = {}) {
   stage.addEventListener("pointerdown", e => {
     if (e.target.closest(".ink-selmenu, .ink-quick")) return;
     if (e.target.classList.contains("ink-text") && st.tool === "text") return;
-    if (e.pointerType === "touch" && penDown) return; // palmo appoggiato mentre si scrive
+    if (e.pointerType === "pen") lastPen = performance.now();
+    if (e.pointerType === "touch" && (penDown || performance.now() - lastPen < 1200 || (e.width || 0) > 46 || (e.height || 0) > 46)) return; // palmo appoggiato mentre si scrive
     if (e.pointerType === "mouse" && e.button !== 0) return;
     cancelAnimationFrame(momentum); closeQuick();
     const [sx, sy] = local(e);
@@ -367,7 +405,7 @@ export function createNotebook(host, page, opts = {}) {
       e.preventDefault(); try { stage.setPointerCapture(e.pointerId); } catch {}
       penId = e.pointerId; penDown = true; moved = false; startPt = [sx, sy];
       const [x, y] = toPage(sx, sy), p = penValue(e, st.tool); hoverAt = null;
-      if (sel && inSel(x, y)) { drag = { x0: x, y0: y, dx: 0, dy: 0, before: snap() }; dirty = true; schedule(); return; }
+      if (sel && inSel(x, y)) { drag = { x0: x, y0: y, dx: 0, dy: 0, before: snap() }; hidden = sel.ids; invalidateAll(); dirty = true; schedule(); return; }
       if (sel) { sel = null; renderTexts(); showSelMenu(); dirty = true; }
       const t = st.tool;
       if (t === "text") { pushUndo(); addText(x, y); penDown = false; return; }
@@ -376,11 +414,11 @@ export function createNotebook(host, page, opts = {}) {
       rulerSide = 0;
       if (st.ruler) { const [, ly] = rulerLocal(sx, sy); if (Math.abs(Math.abs(ly) - RW / 2) < 34) rulerSide = Math.sign(ly) || 1; }
       cur = makeStroke(t, colorOf(t), sizeOf(t), []); cur.pts = []; addPt(sx, sy, p);
-      quickT = setTimeout(() => { if (!moved && cur) { cur = null; showQuick(sx, sy); penDown = false; schedule(); } }, 520);
       return;
     }
     if (e.pointerType === "touch") {
       touches.set(e.pointerId, { x: sx, y: sy, x0: sx, y0: sy });
+      if (touches.size === 1) { clearTimeout(quickT); quickT = setTimeout(() => { const tt = touches.get(e.pointerId); if (tt && touches.size === 1 && Math.hypot(tt.x - tt.x0, tt.y - tt.y0) < 8 && !onRuler(tt.x, tt.y)) { showQuick(tt.x, tt.y); if (gesture) gesture.used = true; } }, 550); }
       if (!gesture || touches.size > gesture.max) startGesture(sx, sy);
     }
   }, { passive: false });
@@ -390,10 +428,11 @@ export function createNotebook(host, page, opts = {}) {
     if (n && Math.hypot(cur.pts[n - 3] - x, cur.pts[n - 2] - y) < 0.6 / cam.z) return;
     cur.pts.push(x, y, p); pathCache.delete(cur);
   }
-  let hoverAt = null;
+  let hoverAt = null, curPred = [], lastPen = 0;
   stage.addEventListener("pointerleave", e => { if (e.pointerType !== "touch" && hoverAt) { hoverAt = null; schedule(); } });
   stage.addEventListener("pointermove", e => {
     const [sx, sy] = local(e);
+    if (e.pointerType === "pen") lastPen = performance.now();
     if (!penDown && (e.pointerType === "pen" || e.pointerType === "mouse") && e.buttons === 0) { hoverAt = [sx, sy, e.pointerType]; schedule(); return; }
     if (e.pointerId === penId && penDown) {
       e.preventDefault();
@@ -402,10 +441,12 @@ export function createNotebook(host, page, opts = {}) {
       if (drag) { const [x, y] = toPage(sx, sy); drag.dx = x - drag.x0; drag.dy = y - drag.y0; schedule(); return; }
       if (lasso) { lasso.push(toPage(sx, sy)); schedule(); return; }
       if (erasing) { for (const ev of list) { const [ax, ay] = local(ev); const [x, y] = toPage(ax, ay); eraserAt = [x, y]; eraseAt(x, y); } schedule(); return; }
+      if (cur && cur.shape && Math.hypot(sx - cur.snapAt[0], sy - cur.snapAt[1]) > 14) { cur.pts = cur.orig; delete cur.shape; delete cur.orig; pathCache.delete(cur); say("Forma annullata"); }
       if (cur && !cur.shape) {
         for (const ev of list) { const [ax, ay] = local(ev); addPt(ax, ay, penValue(ev, cur.t)); }
+        curPred = []; if (e.pointerType === "pen" && e.getPredictedEvents && cur.t !== "marker") { for (const pe of e.getPredictedEvents().slice(0, 3)) { const [ax, ay] = local(pe); const [px, py] = toPage(ax, ay); curPred.push(px, py, penValue(pe, cur.t)); } }
         clearTimeout(holdT); lastMove = performance.now();
-        holdT = setTimeout(() => { if (cur && penDown && moved) { const r = recognize(cur.pts); if (r) { cur.pts = r.pts; cur.shape = r.kind; cur.bb = bbox(cur.pts); pathCache.delete(cur); say("Forma: " + r.kind); schedule(); } } }, 550);
+        holdT = setTimeout(() => { if (cur && penDown && moved && st.shapes && !cur.shape && cur.pts.length >= 24 && plenFlat(cur.pts) > 90) { const r = recognize(cur.pts); if (r) { cur.orig = cur.pts; cur.pts = r.pts; cur.shape = r.kind; cur.snapAt = [sx, sy]; cur.bb = bbox(cur.pts); pathCache.delete(cur); say("Forma: " + r.kind); schedule(); } } }, 750);
         schedule();
       }
       return;
@@ -416,14 +457,14 @@ export function createNotebook(host, page, opts = {}) {
   const endPointer = e => {
     if (e.pointerId === penId) {
       clearTimeout(holdT); clearTimeout(quickT); penId = null; penDown = false;
-      if (drag) { const { dx, dy, before } = drag; drag = null; if (Math.abs(dx) + Math.abs(dy) > 0.5) { undoS.push(before); redoS.length = 0; updUndo(); page.strokes = page.strokes.map(s => sel.ids.has(s.id) ? Object.assign(makeStroke(s.t, s.c, s.s, s.pts.map((v, i) => i % 3 === 0 ? v + dx : i % 3 === 1 ? v + dy : v), s.shape ? { shape: s.shape } : null), { id: s.id }) : s); page.texts.forEach(t => { if (sel.tids.has(t.id)) { t.x += dx; t.y += dy; } }); renderTexts(); changed(); } dirty = true; schedule(); return; }
+      if (drag) { const { dx, dy, before } = drag; drag = null; hidden = null; invalidateAll(); if (Math.abs(dx) + Math.abs(dy) > 0.5) { undoS.push(before); redoS.length = 0; updUndo(); page.strokes = page.strokes.map(s => sel.ids.has(s.id) ? Object.assign(makeStroke(s.t, s.c, s.s, s.pts.map((v, i) => i % 3 === 0 ? v + dx : i % 3 === 1 ? v + dy : v), s.shape ? { shape: s.shape } : null), { id: s.id }) : s); page.texts.forEach(t => { if (sel.tids.has(t.id)) { t.x += dx; t.y += dy; } }); renderTexts(); changed(); } dirty = true; schedule(); return; }
       if (lasso) { finishLasso(); schedule(); return; }
       if (erasing) { erasing = false; eraserAt = null; schedule(); return; }
       if (cur && cur.pts.length) {
-        pushUndo(); cur.bb = bbox(cur.pts); const s = cur; cur = null; page.strokes.push(s);
-        if (s.bb[3] > page.h - 160) page.h += 800; // il foglio si allunga da solo
+        pushUndo(); cur.bb = bbox(cur.pts); const s = cur; cur = null; curPred = []; page.strokes.push(s); const grew = s.bb[3] > page.h - 160, oldW = page.w;
+        if (grew) page.h += 800; // il foglio si allunga da solo
         if (s.bb[2] > page.w - 40 && opts.autoWiden !== false && (page.paper.size === "inf")) page.w += 400;
-        changed();
+        if (grew || page.w !== oldW) changed(); else { addToTiles(s); changed(false); }
       }
       cur = null; schedule(); return;
     }
@@ -458,7 +499,7 @@ export function createNotebook(host, page, opts = {}) {
   }
   function endGesture() {
     const g = gesture; gesture = null; if (!g) return;
-    const quick = performance.now() - g.t0 < 320 && g.travel < 12;
+    clearTimeout(quickT); const quick = performance.now() - g.t0 < 320 && g.travel < 12 && !g.used;
     if (quick && g.max === 1 && g.tap) { const r = stage.getBoundingClientRect(); if (editTextAt(r.left + g.tap[0], r.top + g.tap[1])) return; }
     if (quick && g.max === 2) return undo();
     if (quick && g.max === 3) return redo();
@@ -507,7 +548,7 @@ export function createNotebook(host, page, opts = {}) {
       el("div", { class: "row" }, el("button", { onclick: () => { pushUndo(); page.w += 400; changed(); paperMenu(); } }, "Allarga →"), el("button", { onclick: () => { pushUndo(); page.h += 800; changed(); paperMenu(); } }, "Allunga ↓"), el("button", { onclick: () => { fit(); clampCam(); dirty = true; schedule(); } }, "Adatta")));
   }
   function moreMenu() {
-    popup(moreB, el("label", { class: "row" }, el("input", { type: "checkbox", ...(st.fingerDraw ? { checked: "" } : {}), onchange: e => { st.fingerDraw = e.target.checked; persist(); } }), " Scrivi anche col dito (senza Apple Pencil)"),
+    popup(moreB, el("label", { class: "row" }, el("input", { type: "checkbox", ...(st.shapes ? { checked: "" } : {}), onchange: e => { st.shapes = e.target.checked; persist(); } }), " Forme perfette (tieni ferma la penna a fine tratto)"), el("label", { class: "row" }, el("input", { type: "checkbox", ...(st.fingerDraw ? { checked: "" } : {}), onchange: e => { st.fingerDraw = e.target.checked; persist(); } }), " Scrivi anche col dito (senza Apple Pencil)"),
       el("div", { class: "mut" }, "Pencil: scrive · dito: scorre, pizzica per lo zoom · 2 dita tocco: annulla · 3 dita: ripristina · penna ferma all'inizio: strumenti rapidi · penna ferma a fine tratto: forma perfetta"),
       el("button", { onclick: () => { closePop(); exportPNG(); } }, "Esporta immagine (PNG)"),
       el("button", { class: "danger", onclick: () => { pushUndo(); page.strokes = []; page.texts = []; renderTexts(); changed(); closePop(); } }, "Svuota pagina"));
@@ -618,3 +659,14 @@ export const INK_CSS = `
 .ink-toast.show{opacity:1;transform:translate(-50%,0)}
 @keyframes inkPop{from{opacity:0;transform:scale(.9)}to{opacity:1;transform:none}}
 `;
+
+// miniatura vera della pagina (carta + tratti + testo) per la griglia degli appunti
+export function renderThumb(page, cssW) {
+  const d = Math.min(window.devicePixelRatio || 1, 2), w = Math.round(cssW * d), hgt = Math.round(w * 1.3), c = document.createElement("canvas"); c.width = w; c.height = hgt;
+  const x = c.getContext("2d"), s = w / (page.w || 820), vis = hgt / s; x.scale(s, s);
+  const pg = { ...page, paper: page.paper || { type: "lines", gap: 32, color: "#fff" } };
+  x.save(); x.beginPath(); x.rect(0, 0, page.w, vis); x.clip(); drawPaper(x, { ...pg, h: Math.max(page.h, vis) }, 0, 0, page.w, vis, s);
+  for (const st of page.strokes || []) { if (st.bb[1] > vis + 20) continue; drawStroke(x, st); }
+  for (const t of page.texts || []) { if (t.y > vis) continue; x.fillStyle = t.color || "#1c1c1e"; x.font = `${t.size}px -apple-system,system-ui,sans-serif`; (t.text || "").split("\n").slice(0, 40).forEach((l, i) => { const lh = t.size * 1.38; x.fillText(l.slice(0, 90), t.x, t.y + t.size + i * lh, t.w); }); }
+  x.restore(); return c;
+}

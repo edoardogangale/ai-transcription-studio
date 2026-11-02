@@ -2,10 +2,18 @@
 /* Editor sincronizzato: modalità Ascolto (evidenziazione parola per parola) e Modifica, note/evidenziazioni, parlanti. */
 ROUTES.push([/^#\/t\/(\w+)$/, async id => {
   let t = await api("/api/transcripts/" + id);
-  if (t.status === "recording") { location.hash = "#/live"; return; }
+  let orphan = false;
+  if (t.status === "recording") {
+    const act = await api("/api/activity").catch(() => ({ live: [] }));
+    if (act.live.some(l => l.id === id)) { location.hash = "#/live"; return; }
+    orphan = true;     // registrazione rimasta "aperta" (pagina chiusa o riavvio): si può recuperare o eliminare
+  }
   if (t.status !== "done") {
     const box = h("div"); $app.replaceChildren(h("h1", null, t.title || "Trascrizione"), box);
-    const draw = () => box.replaceChildren(jobRow(t), t.status === "failed" ? h("div", { class: "notice bad" }, t.error) : null);
+    const draw = () => box.replaceChildren(jobRow(t), t.status === "failed" ? h("div", { class: "notice bad" }, t.error) : null,
+      orphan && h("div", { class: "notice warn", style: "margin-top:12px" }, h("p", { style: "margin-top:0" }, "Questa registrazione è rimasta aperta (la pagina è stata chiusa o l'app riavviata). L'audio già inviato al server è al sicuro: puoi recuperarlo e avere la trascrizione, oppure eliminarla."),
+        h("div", { class: "row" }, h("button", { class: "primary", onclick: async () => { try { await api(`/api/live/${id}/recover`, { method: "POST" }); toast("Registrazione recuperata"); route(); } catch (e) { showErr("Recupero non riuscito: " + e.message); } } }, "Recupera audio e testo"),
+          h("button", { class: "danger", onclick: () => deleteOne(t) }, "Elimina"))));
     draw(); poll(async () => { t = await api("/api/transcripts/" + id); draw(); if (t.status === "done") route(); }, 1500); return;
   }
   const [sys, fl] = await Promise.all([api("/api/system"), api("/api/folders")]); LIB.folders = fl.folders;
@@ -223,7 +231,7 @@ ROUTES.push([/^#\/t\/(\w+)$/, async id => {
       h("button", { onclick: async () => { try { await copyTranscripts([id], expOpt()); } catch (e) { toast(e.message); } } }, "⧉ Copia"), exp,
       h("button", { onclick: () => shareAudio([{ id, title: t.title }]) }, "↗ Condividi audio"),
       h("button", { onclick: async () => { const sel = h("select", null, folderOptions().map(o => h("option", { value: o.id, selected: (o.id || null) === (t.folder_id || null) }, o.label))); const r = await modal("Sposta in…", sel, [["Annulla", null], ["Sposta", () => ({ v: sel.value }), "primary"]]); if (r) { await api("/api/transcripts/" + id, { method: "PATCH", json: { set_folder: true, folder_id: r.v || null } }); toast("Spostata"); route(); } } }, "📁 " + (t.folder_path || "Senza cartella")),
-      h("button", { class: "danger", onclick: async () => { if (confirm("Eliminare definitivamente trascrizione e file audio?")) { await api("/api/transcripts/" + id, { method: "DELETE" }); location.hash = "#/"; } } }, "Elimina"))),
+      h("button", { class: "danger", onclick: async () => { if ((await confirmBox("Eliminare definitivamente trascrizione e file audio?", { ok: "Elimina", danger: true }))) { try { await api("/api/transcripts/" + id, { method: "DELETE" }); location.hash = "#/"; } catch (e) { showErr("Eliminazione non riuscita: " + e.message); } } } }, "Elimina"))),
     h("div", { class: "m" }, [live ? "● registrazione live" : null, mname(t.model_id), t.language === "auto" ? "lingua rilevata: " + (t.detected_language || "n/d") : t.language, st.words && `${st.words} parole`, st.elapsed_s != null && !live && `elaborata in ${fmtT(st.elapsed_s)}`, st.realtime_factor && !live && !st.diarized && `${speedText(st.realtime_factor)}`, st.peak_rss_mb && `RAM di picco ${st.peak_rss_mb} MB`].filter(Boolean).join(" · ")),
     live && h("div", { class: "notice", style: "margin-top:10px" }, "Trascritta in diretta con un modello veloce? Ritrascrivi lo stesso audio con uno più accurato: ", recomp, h("button", { class: "small", onclick: async () => { try { const r = await api(`/api/transcripts/${id}/retranscribe`, { json: { model_id: recomp.value } }); location.hash = "#/t/" + r.id; } catch (e) { toast(e.message, 6000); } } }, "Ritrascrivi")),
     h("div", { class: "editor", style: "margin-top:16px" },

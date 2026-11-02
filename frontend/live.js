@@ -69,7 +69,7 @@ const Recorder = {
       if (m.type === "ready") { this.resend(Math.round(m.received_s * SR16)); }
       else if (m.type === "status") { this.status = m; this.serverRecv = Math.round(m.received_s * SR16); }
       else if (m.type === "segment") { this.segs.push(m.seg); }
-      else if (m.type === "done") { this.finished(); }
+      else if (m.type === "done") { m.aborted ? this.aborted() : this.finished(); }
       this.emit();
     };
     ws.onclose = () => { if (this.ws === ws && !this.stopping && this.state !== "idle") { this.status = { ...(this.status || {}), offline: true }; this.reconnectTimer = setTimeout(() => this.connect(), 2000); this.emit(); } };
@@ -108,6 +108,11 @@ const Recorder = {
       api(`/api/transcripts/${tid}/retranscribe`, { json: { model_id: mid } }).then(() => toast("Ritrascrizione avviata con " + mname(mid), 5000)).catch(e => toast("Ritrascrizione non avviata: " + e.message, 6000));
     }
     if (location.hash === "#/live") location.hash = "#/t/" + tid;
+  },
+  aborted() {   // la registrazione è stata eliminata (da un'altra pagina): chiudi tutto senza salvare
+    if (this.state === "idle") return;
+    this.stopping = true; this.cleanup(); this.state = "idle"; this.emit(); Notif.close("ats-rec"); toast("Registrazione eliminata");
+    window.dispatchEvent(new CustomEvent("jobs-changed"));
   },
   cleanup() { try { this.ws?.close(); } catch {} try { this.stream?.getTracks().forEach(t => t.stop()); } catch {} try { this.ctx?.close(); } catch {} clearInterval(this.timer); clearTimeout(this.reconnectTimer); Wake.off(); try { navigator.mediaSession.playbackState = "none"; } catch {} this.ws = this.ctx = this.stream = this.node = null; },
 

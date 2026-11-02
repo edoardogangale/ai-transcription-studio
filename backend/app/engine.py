@@ -275,6 +275,8 @@ def _run(tid):
             db.update(tid, chunks_done=len(results), partial={"plan": plan, "results": results, "speakers": speakers})
     finally:
         release(mid, device)
+    if not db.get(tid):           # eliminata mentre lavorava: niente da salvare (e niente indice orfano)
+        return
     segments = [s for r in results for s in r]
     segments, removed = _collapse_loops(segments)
     has_words = any(s.get("words") for s in segments)

@@ -28,9 +28,18 @@ function jobRow(t) {
       prog && h("div", { style: "margin-top:6px" }, h("div", { class: "bar" }, h("i", { style: `width:${pct}%` })), h("div", { class: "m" }, ((t.stats || {}).phase || "") + (t.chunks_total ? ` · segmento ${t.chunks_done}/${t.chunks_total}` : " In attesa…"))),
       t.status === "failed" && h("div", { class: "m err" }, t.error)),
     h("span", { class: "chip " + cls }, lab),
+    h("button", { class: "small danger", title: "Elimina questa registrazione", "aria-label": "Elimina " + (t.title || ""), onclick: () => deleteOne(t) }, "🗑"),
     done && h("button", { class: "small", title: "Copia la trascrizione", "aria-label": "Copia", onclick: () => copyTranscripts([t.id], EXP).catch(e => toast(e.message)) }, "⧉"),
     prog && h("button", { class: "small", onclick: async () => { await api(`/api/transcripts/${t.id}/cancel`, { method: "POST" }); toast("Annullamento richiesto"); loadLib(); } }, "Annulla"),
     (t.status === "failed" || t.status === "cancelled") && h("button", { class: "small", onclick: async () => { try { await api(`/api/transcripts/${t.id}/retry`, { method: "POST" }); toast("Ripreso dai segmenti già elaborati"); loadLib(); } catch (e) { toast(e.message); } } }, "Riprendi"));
+}
+
+async function deleteOne(t) {
+  const live = t.status === "recording", run = t.status === "running" || t.status === "queued";
+  const msg = live ? `«${t.title}» è una registrazione ancora aperta: verrà chiusa senza salvare e poi eliminata.` : run ? `«${t.title}» è ancora in elaborazione: verrà fermata e poi eliminata.` : `Eliminare definitivamente «${t.title}» (trascrizione e file audio)?`;
+  if (!(await confirmBox(msg, { ok: "Elimina", danger: true }))) return;
+  try { await api("/api/transcripts/" + t.id, { method: "DELETE" }); LIB.sel.delete(t.id); toast("Eliminata"); } catch (e) { showErr("Eliminazione non riuscita: " + e.message); }
+  if (location.hash.startsWith("#/t/")) location.hash = "#/"; else loadLib(true);
 }
 
 function visibleItems() {
@@ -63,7 +72,7 @@ async function folderMenu(f) {
         const sel = h("select", null, [{ id: "", label: "Livello principale (materia)" }, ...folderOptions(false).filter(o => o.id !== f.id)].map(o => h("option", { value: o.id }, o.label)));
         const r = await modal("Sposta «" + f.name + "» dentro…", sel, [["Annulla", null], ["Sposta", () => ({ v: sel.value }), "primary"]]);
         if (r) { try { await api("/api/folders/" + f.id, { method: "PATCH", json: { move: true, parent_id: r.v || null } }); document.querySelector("dialog")?.close(); loadLib(); } catch (e) { toast(e.message, 5000); } } } }, "Sposta…"),
-    h("button", { class: "danger", onclick: async () => { if (confirm(`Eliminare la cartella «${f.name}»? Le registrazioni NON vengono eliminate: restano nella cartella superiore.`)) { await api("/api/folders/" + f.id, { method: "DELETE" }); if (LIB.folder === f.id) selectFolder("all"); document.querySelector("dialog")?.close(); loadLib(); } } }, "Elimina cartella"));
+    h("button", { class: "danger", onclick: async () => { if ((await confirmBox(`Eliminare la cartella «${f.name}»? Le registrazioni NON vengono eliminate: restano nella cartella superiore.`, { ok: "Elimina", danger: true }))) { await api("/api/folders/" + f.id, { method: "DELETE" }); if (LIB.folder === f.id) selectFolder("all"); document.querySelector("dialog")?.close(); loadLib(); } } }, "Elimina cartella"));
   await modal("📁 " + f.name, body);
 }
 
@@ -95,7 +104,7 @@ function actionBar() {
       h("button", { disabled: !doneIds.length, onclick: () => exportBundle(doneIds, "txt", EXP) }, "TXT"),
       h("button", { disabled: !doneIds.length, onclick: () => shareAudio(done.map(t => ({ id: t.id, title: t.title }))) }, "↗ Condividi audio"),
       h("button", { onclick: moveSelected }, "📁 Sposta in…"),
-      h("button", { class: "danger", onclick: async () => { if (confirm(`Eliminare DEFINITIVAMENTE ${ids.length} registrazioni (trascrizioni e file audio)?`)) { const r = await api("/api/transcripts/delete", { json: { ids } }); toast(`Eliminate ${r.deleted}`); LIB.sel.clear(); loadLib(); } } }, "Elimina"),
+      h("button", { class: "danger", onclick: async () => { if ((await confirmBox(`Eliminare DEFINITIVAMENTE ${ids.length} registrazioni (trascrizioni e file audio)? Quelle ancora in corso verranno fermate.`, { ok: "Elimina", danger: true }))) { try { const r = await api("/api/transcripts/delete", { json: { ids } }); toast(r.deleted === ids.length ? `Eliminate ${r.deleted}` : `Eliminate ${r.deleted} su ${ids.length}`); } catch (e) { showErr("Eliminazione non riuscita: " + e.message); } LIB.sel.clear(); loadLib(true); } } }, "Elimina"),
       h("button", { onclick: () => { LIB.sel.clear(); drawLib(); } }, "✕")),
     h("div", { class: "row m", style: "gap:14px" },
       h("label", { class: "opt" }, h("input", { type: "checkbox", checked: EXP.teacher_only, onchange: e => { EXP.teacher_only = e.target.checked; LSJ.set("exp_teacher", EXP.teacher_only); } }), "solo l'insegnante (se riconosciuto)"),
@@ -113,7 +122,7 @@ function drawLib() {
   if (!libRoot) return;
   const fm = folderMap(), items = visibleItems(), cur = LIB.folder === "all" ? "Tutte le registrazioni" : LIB.folder === "none" ? "Senza cartella" : folderPath(LIB.folder, fm) || "Archivio";
   const act = items.filter(t => ["queued", "running", "recording"].includes(t.status)), rest = items.filter(t => !["queued", "running", "recording"].includes(t.status));
-  const allSel = rest.length && rest.every(t => LIB.sel.has(t.id));
+  const allSel = items.length && items.every(t => LIB.sel.has(t.id));
   libRoot.replaceChildren(
     sidebar(),
     h("section", { class: "lib-main" },
@@ -134,15 +143,16 @@ function hitsView() {
     a.querySelector(".snip").innerHTML = safeSnippet(r.snippet); return a; })));
 }
 function listView(act, rest, allSel) {
-  return [act.length ? h("div", null, h("h2", null, "Processi in corso"), h("div", { class: "list" }, act.map(jobRow))) : null,
-    rest.length ? h("div", null, h("div", { class: "row sp" }, h("h2", null, LIB.q ? "Titoli corrispondenti" : "Registrazioni"),
-      h("label", { class: "opt m" }, h("input", { type: "checkbox", checked: !!allSel, onchange: e => { rest.forEach(t => e.target.checked ? LIB.sel.add(t.id) : LIB.sel.delete(t.id)); drawLib(); } }), "Seleziona tutto")),
-      h("div", { class: "list" }, rest.map(jobRow)))
+  const all = [...act, ...rest];
+  return [all.length ? h("div", { class: "row sp", style: "margin-top:6px" }, h("span", { class: "m" }, `${all.length} registrazion${all.length === 1 ? "e" : "i"}`),
+      h("label", { class: "opt m" }, h("input", { type: "checkbox", checked: !!allSel, "aria-label": "Seleziona tutto", onchange: e => { all.forEach(t => e.target.checked ? LIB.sel.add(t.id) : LIB.sel.delete(t.id)); drawLib(); } }), "Seleziona tutto (anche quelle in corso)")) : null,
+    act.length ? h("div", null, h("h2", null, "Processi in corso"), h("div", { class: "list" }, act.map(jobRow))) : null,
+    rest.length ? h("div", null, h("h2", null, LIB.q ? "Titoli corrispondenti" : "Registrazioni"), h("div", { class: "list" }, rest.map(jobRow)))
       : (!act.length && h("div", { class: "notice", style: "margin-top:20px" }, LIB.q ? "Nessun titolo corrispondente." : LIB.folder === "all" ? "Ancora nessuna trascrizione. Premi “Nuova trascrizione” o “Registra live” per iniziare." : "Cartella vuota: trascina qui delle registrazioni o scegli questa cartella quando ne crei una nuova."))];
 }
 function drawListOnly() {   // durante la digitazione non ridisegna l'input (niente perdita di focus)
   const items = visibleItems(), act = items.filter(t => ["queued", "running", "recording"].includes(t.status)), rest = items.filter(t => !["queued", "running", "recording"].includes(t.status));
-  document.getElementById("liblist")?.replaceChildren(listView(act, rest, rest.length && rest.every(t => LIB.sel.has(t.id))));
+  document.getElementById("liblist")?.replaceChildren(listView(act, rest, items.length && items.every(t => LIB.sel.has(t.id))));
 }
 let searchT;
 function searchContent() {

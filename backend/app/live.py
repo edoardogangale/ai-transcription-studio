@@ -176,6 +176,20 @@ class LiveSession:
         sessions.pop(self.tid, None)
         self.emit({"type": "done"})
 
+    def abort(self):
+        """Chiude la sessione SENZA salvarla (usata quando l'utente elimina una registrazione ancora aperta)."""
+        if not self.stopped:
+            self.stopped = True
+            self.jobs.put(None)
+            self.worker.join(timeout=30)
+            try:
+                self.f.close()
+            except OSError:
+                pass
+            engine.release(self.mid, self.device)
+        sessions.pop(self.tid, None)
+        self.emit({"type": "done", "aborted": True})
+
 
 def finalize_audio(tid, upload_id, segments, live_stats=None):
     """Converte live.pcm in m4a, scrive meta.json (così si può ritrascrivere) e completa la trascrizione."""

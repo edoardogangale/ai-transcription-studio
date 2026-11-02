@@ -12,7 +12,8 @@ const LS = { get(k, d) { try { return localStorage.getItem(k) ?? d; } catch { re
 const LSJ = { get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }, set(k, v) { LS.set(k, JSON.stringify(v)); } };
 let timers = [];
 const clearTimers = () => { timers.forEach(clearInterval); timers = []; };
-const poll = (fn, ms) => { timers.push(setInterval(fn, ms)); };
+// gli aggiornamenti periodici falliscono in silenzio (es. la registrazione che stai guardando è stata appena eliminata)
+const poll = (fn, ms) => { timers.push(setInterval(() => { try { const r = fn(); if (r && r.catch) r.catch(() => {}); } catch {} }, ms)); };
 
 /* ---------- utilità ---------- */
 function h(tag, attrs, ...kids) {
@@ -80,7 +81,17 @@ function modal(title, body, actions) {
     document.body.append(d); d.showModal();
   });
 }
+/* Conferma con una finestra DELL'APP: i confirm() nativi su iPad/Safari possono essere bloccati dopo qualche richiesta e allora non succede nulla */
+async function confirmBox(message, { ok = "Conferma", danger = false, title = "Sei sicuro?" } = {}) {
+  return !!(await modal(title, h("p", { style: "margin:0;line-height:1.5" }, message), [["Annulla", null], [ok, () => true, danger ? "danger" : "primary"]]));
+}
 const askText = async (title, label, value = "") => { const i = h("input", { type: "text", value, placeholder: label }); const r = await modal(title, i, [["Annulla", null], ["OK", () => i.value.trim(), "primary"]]); return r || null; };
+
+/* Nessun errore deve restare silenzioso: se un'azione fallisce, lo si legge a schermo */
+let _lastErr = "", _lastErrAt = 0;
+function showErr(msg) { msg = String(msg || "Errore sconosciuto"); if (msg === _lastErr && Date.now() - _lastErrAt < 1500) return; _lastErr = msg; _lastErrAt = Date.now(); toast("⚠ " + msg, 7000); }
+addEventListener("unhandledrejection", e => { const r = e.reason; if (r && r.name === "AbortError") return; showErr(r && r.message ? r.message : r); });
+addEventListener("error", e => { if (/ResizeObserver/.test(e.message || "")) return; showErr(e.message); });
 
 /* ---------- tema ---------- */
 function applyTheme(t) { if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme; }
@@ -280,6 +291,8 @@ const Uploads = {
 };
 
 function startApp() {
+  // toccare il link della sezione in cui sei già: ricarica la vista (altrimenti sembrerebbe che il pulsante non faccia nulla)
+  document.querySelectorAll(".topbar nav a, .topbar .brand").forEach(a => a.addEventListener("click", () => { if (a.getAttribute("href") === (location.hash || "#/")) route(); }));
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("sw.js").catch(() => {});
   showWho(); pollActivity(); setInterval(pollActivity, 2000);
   addEventListener("beforeunload", e => { if (UP.items.some(u => u.state === "uploading") || (window.Recorder && Recorder.state !== "idle")) { e.preventDefault(); e.returnValue = ""; } });

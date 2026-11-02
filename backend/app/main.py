@@ -600,12 +600,26 @@ def _delete_one(t, with_audio=True):
         shutil.rmtree(config.UPLOADS / t["upload_id"], ignore_errors=True)  # eliminazione definitiva dei file
 
 
+def _discard(t, with_audio=True):
+    """Elimina una registrazione IN QUALUNQUE STATO: se è una registrazione live aperta la chiude senza salvarla, se è un lavoro
+    in corso lo annulla, poi cancella dati e file. (Prima rispondeva 409 e la registrazione restava lì per sempre.)"""
+    tid = t["id"]
+    s = live.sessions.get(tid)
+    if s:
+        s.abort()
+    if t["status"] in ("running", "queued"):
+        engine.cancel(tid)
+        for _ in range(80):                       # fino a ~8 s perché il lavoro si fermi tra un segmento e l'altro
+            cur = db.get(tid)
+            if not cur or cur["status"] != "running":
+                break
+            time.sleep(0.1)
+    _delete_one(db.get(tid) or t, with_audio)
+
+
 @app.delete("/api/transcripts/{tid}")
 def delete_t(tid: str, with_audio: bool = True):
-    t = _t(tid)
-    if t["status"] in ("running", "recording"):
-        err(409, "Annulla/ferma il lavoro prima di eliminarlo.")
-    _delete_one(t, with_audio)
+    _discard(_t(tid), with_audio)
     return {"ok": True}
 
 
@@ -618,10 +632,20 @@ def delete_many(b: IdsIn):
     n = 0
     for tid in b.ids:
         t = db.get(tid)
-        if _own(t) and t["status"] not in ("running", "recording"):
-            _delete_one(t)
+        if _own(t):
+            _discard(t)
             n += 1
     return {"deleted": n}
+
+
+@app.post("/api/live/{tid}/recover")
+def live_recover(tid: str):
+    """Recupera una registrazione rimasta 'aperta' (pagina chiusa, riavvio): converte l'audio già salvato e chiude la sessione."""
+    t = _t(tid)
+    if t["status"] != "recording" or tid in live.sessions:
+        err(409, "Questa registrazione non è in attesa di recupero.")
+    live.finalize_audio(tid, t["upload_id"], t.get("segments") or [], {"live": True, "recovered": True})
+    return {"status": db.get(tid)["status"]}
 
 
 @app.get("/api/transcripts/{tid}/audio")

@@ -193,6 +193,8 @@ node tests/e2e/e2e_real.mjs ...        # browser con modelli veri (server normal
 node tests/e2e/e2e_users_ai.mjs ...    # profili, accesso, correzione AI (server con STUDIO_TOKEN + tests/e2e/fake_ollama.py)
 node tests/e2e/e2e_ipad.mjs ...        # iPad Pro emulato: touch, bersagli, orientamenti
 node tests/e2e/e2e_notebook.mjs ...    # quaderno: testo, inchiostro (pen simulato), ancoraggio, stampa PDF
+node tests/e2e/e2e_delete.mjs ...      # eliminazione in ogni stato (finita, in elaborazione, registrazione aperta/orfana, multipla)
+node tests/e2e/e2e_allbuttons.mjs ...  # prova a premere TUTTI i pulsanti di ogni schermata e segnala quelli senza effetto
 node tests/e2e/stable_live.mjs ...     # i pulsanti del live non vengono ridisegnati (i tocchi non si perdono)
 ```
 **Superati in sviluppo**: 67 test backend (inclusi profili isolati e correzione AI con finto Ollama) (pipeline, cartelle, ricerca, PDF unico, ZIP audio, parallelismo reale, live via WebSocket, recupero dopo crash, filtro insegnante…); 4 test con modelli veri (parlanti + solo insegnante, live, tutti i modelli in inglese); **57 controlli nel browser** con mock (cartelle, 3 file in parallelo con avvio automatico, copia multipla, PDF unico, condivisione, evidenziazione parola per parola, note, live con microfono finto, responsive iPad/smartphone) e **25 su profili/accesso/AI**, **34 su iPad Pro emulato** e **19 con modelli veri** (parola evidenziata coerente con i tempi del modello, salto alla parola, voci estranee escluse, live).
@@ -209,7 +211,7 @@ Il mock (`STUDIO_ENABLE_MOCK=1`) aggiunge due schede "MOCK" chiaramente etichett
 
 ## Privacy
 
-Tutto è locale (`data/`: audio, database, pesi). Nessuna telemetria. Accessi di rete: solo il download dei pesi da GitHub (su tua richiesta) e, se lo usi, Ollama su `127.0.0.1`. Eliminare una trascrizione rimuove **definitivamente** anche l'audio (se non usato da altre).
+Tutto è locale (`data/`: audio, database, pesi). Nessuna telemetria. Accessi di rete: solo il download dei pesi da GitHub (su tua richiesta) e, se lo usi, Ollama su `127.0.0.1`. Eliminare una trascrizione rimuove **definitivamente** anche l'audio (se non usato da altre). Funziona in qualunque stato: anche se è in elaborazione o con una registrazione live ancora aperta (viene fermata e scartata). La conferma è dentro l'app (niente finestre del browser) e ogni errore è mostrato a schermo; "Seleziona tutto" include anche gli elementi in corso.
 
 ## Struttura
 

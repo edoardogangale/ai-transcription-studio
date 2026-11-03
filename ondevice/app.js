@@ -57,7 +57,7 @@ function downsample(buf, inRate) { // -> Float32 16 kHz (media su finestre: anti
   for (let i = 0; i < n; i++) { const a = Math.floor(i * ratio), b = Math.min(buf.length, Math.floor((i + 1) * ratio)); let s = 0; for (let j = a; j < b; j++) s += buf[j]; out[i] = s / Math.max(1, b - a); }
   return out;
 }
-class Segmenter { // VAD a energia: taglia alla pausa (≥0,7 s) o a 15 s
+class Segmenter { // VAD a energia. Frasi lunghe = più contesto per Whisper (che lavora su finestre di 30 s): taglia alla pausa solo dopo ≥6 s, a fine frase dopo 2,5 s di silenzio, comunque entro 25 s
   constructor(onChunk) { this.on = onChunk; this.rest = new Float32Array(0); this.i = 0; this.hist = []; this.thr = -45; this.active = false; this.buf = []; this.bufDb = []; this.start = 0; this.lastVoice = -1; this.pre = []; }
   feed(x) {
     const a = new Float32Array(this.rest.length + x.length); a.set(this.rest); a.set(x, this.rest.length);
@@ -73,9 +73,9 @@ class Segmenter { // VAD a energia: taglia alla pausa (≥0,7 s) o a 15 s
     if (db > this.thr) { this.lastVoice = i; if (!this.active) { this.active = true; this.buf = this.pre.map(p => p[0]); this.bufDb = this.pre.map(p => p[1]); this.start = i - this.pre.length; } }
     if (this.active) {
       this.buf.push(copy); this.bufDb.push(db);
-      const silent = (i - this.lastVoice) * 0.03;
-      if (silent >= 0.7) this.cut(this.buf.length - Math.max(0, i - this.lastVoice - 5), false);
-      else if (this.buf.length * 0.03 >= 15) { const lo = Math.max(0, this.buf.length - 50); let m = lo; for (let j = lo; j < this.buf.length; j++) if (this.bufDb[j] < this.bufDb[m]) m = j; this.cut(m + 1, true); }
+      const silent = (i - this.lastVoice) * 0.03, dur = this.buf.length * 0.03;
+      if (silent >= 2.5 || (silent >= 0.8 && dur >= 6)) this.cut(this.buf.length - Math.max(0, i - this.lastVoice - 5), false);
+      else if (dur >= 25) { const lo = Math.max(0, this.buf.length - 100); let m = lo; for (let j = lo; j < this.buf.length; j++) if (this.bufDb[j] < this.bufDb[m]) m = j; this.cut(m + 1, true); }
     } else { this.pre.push([copy, db]); if (this.pre.length > 8) this.pre.shift(); }
   }
   cut(n, keep) {

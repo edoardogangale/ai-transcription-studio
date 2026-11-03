@@ -3,7 +3,7 @@
   --shadow:0 0 0 .5px rgba(0,0,0,.06),0 2px 8px rgba(0,0,0,.06),0 12px 28px rgba(0,0,0,.06);--side:272px;color-scheme:light}
 @media(prefers-color-scheme:dark){:root{--bg:#000;--card:#1c1c1e;--fg:#f5f5f7;--mut:#98989f;--line:rgba(84,84,88,.5);--fill:rgba(118,118,128,.24);--acc:#ffb400;--tint:#ffb400;--ok:#32d74b;--bad:#ff453a;--shadow:0 0 0 .5px rgba(255,255,255,.08),0 8px 24px rgba(0,0,0,.5);color-scheme:dark}}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{height:100%}body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.4 -apple-system,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;letter-spacing:-.011em;overflow-x:hidden}
+body{min-height:100%;margin:0;background:var(--bg);color:var(--fg);font:17px/1.4 -apple-system,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;letter-spacing:-.011em}
 #shell{display:flex;min-height:100%}
 #side{position:sticky;top:0;align-self:flex-start;height:100vh;width:var(--side);flex-shrink:0;padding:calc(18px + env(safe-area-inset-top)) 14px 18px;display:flex;flex-direction:column;gap:2px;background:color-mix(in srgb,var(--bg) 70%,var(--card));border-right:.5px solid var(--line)}
 #side .brand{font-size:13px;font-weight:600;color:var(--mut);letter-spacing:.02em;text-transform:uppercase;padding:6px 12px 10px}

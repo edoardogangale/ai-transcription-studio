@@ -396,7 +396,7 @@ export function createNotebook(host, page, opts = {}) {
     if (e.target.closest(".ink-selmenu, .ink-quick")) return;
     if (e.target.classList.contains("ink-text") && st.tool === "text") return;
     if (e.pointerType === "pen") lastPen = performance.now();
-    if (e.pointerType === "touch" && (penDown || performance.now() - lastPen < 1200 || (e.width || 0) > 46 || (e.height || 0) > 46)) return; // palmo appoggiato mentre si scrive
+    if (e.pointerType === "touch" && (penDown || performance.now() - lastPen < 900 || (e.width || 0) > 90 || (e.height || 0) > 90)) return; // palmo appoggiato mentre si scrive
     if (e.pointerType === "mouse" && e.button !== 0) return;
     cancelAnimationFrame(momentum); closeQuick();
     const [sx, sy] = local(e);
@@ -426,6 +426,7 @@ export function createNotebook(host, page, opts = {}) {
     if (rulerSide) { const [lx] = rulerLocal(sx, sy); [sx, sy] = rulerWorld(lx, rulerSide * (RW / 2 + sizeOf(cur.t) / 2)); }
     const [x, y] = toPage(sx, sy); const n = cur.pts.length;
     if (n && Math.hypot(cur.pts[n - 3] - x, cur.pts[n - 2] - y) < 0.6 / cam.z) return;
+    if (n >= 3) p = cur.lastP + (p - cur.lastP) * 0.35; cur.lastP = p; // pressione levigata
     cur.pts.push(x, y, p); pathCache.delete(cur);
   }
   let hoverAt = null, curPred = [], lastPen = 0;
@@ -514,7 +515,8 @@ export function createNotebook(host, page, opts = {}) {
     else { cam.tx -= e.deltaX; cam.ty -= e.deltaY; }
     clampCam(); dirty = true; schedule();
   }, { passive: false });
-  stage.addEventListener("touchstart", e => { if (e.target.closest(".ink-text[contenteditable=true], .ink-selmenu, .ink-quick")) return; e.preventDefault(); }, { passive: false }); // niente zoom/selezione di Safari
+  const block = e => { if (!e.target.closest(".ink-text[contenteditable=true], .ink-selmenu, .ink-quick, .ink-bar")) e.preventDefault(); };
+  for (const ev of ["touchstart", "touchmove", "gesturestart", "gesturechange", "gestureend"]) stage.addEventListener(ev, block, { passive: false }); // niente zoom/scorrimento nativi di Safari sul foglio
 
   // ----- strumenti rapidi (penna tenuta ferma) -----
   let quick = null;

@@ -30,6 +30,13 @@ App web installabile: la trascrizione (Whisper) gira **dentro Safari sull'iPad**
 ## Fluidità (120 Hz)
 Il foglio è disegnato in tessere bitmap: scorrere e zoomare ricompone poche immagini invece di ridisegnare i tratti (misurato in Chromium con 3000 tratti: ~1 ms → ~0,06 ms di lavoro JS per fotogramma). Anche la scrittura usa gli eventi "coalesced" e "predicted" della Pencil. **Safari segue i 120 Hz solo se**: *Impostazioni → Batteria → Risparmio energetico* è spento e *Impostazioni → App → Safari → Avanzate → Funzionalità → «Prefer Page Rendering Updates near 60fps»* è spento (se la voce c'è).
 
+## Scorrimento, zoom e Pencil (versione aggiornata)
+- Il foglio blocca i gesti nativi di Safari: un dito scorre, due dita pizzicano per lo zoom, senza zoomare tutta la pagina.
+- La pagina non si zooma più con il pizzico del browser (`maximum-scale=1`).
+- Il tratto della penna è levigato e la pressione viene addolcita, così il tratto non sfarfalla.
+- **Doppio tocco e pulsante della Apple Pencil**: Safari non li riceve. Servirebbe un'app nativa (Xcode, su Mac).
+- **Trascrizione sul dispositivo**: le frasi arrivano fino a 25 s, con più contesto per Whisper. Il taglio avviene a fine frase (2,5 s di silenzio) o dopo una pausa dopo 6 s.
+
 ## Limiti
 - Modelli più piccoli di quelli del server: qualità più bassa, soprattutto in italiano. Niente riconoscimento dei parlanti né correzione AI.
 - Se il «Ritardo trascrizione» cresce, il modello è troppo lento per quell'iPad: scegline uno più piccolo.

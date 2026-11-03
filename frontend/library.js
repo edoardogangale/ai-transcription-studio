@@ -177,6 +177,6 @@ ROUTES.push([/^#?\/?$/, async () => {
   libRoot = h("div", { class: "lib" }); $app.replaceChildren(libRoot); LIB._sig = "";
   await loadLib(true);
   const reload = () => { if (libRoot?.isConnected && document.activeElement?.id !== "libq") loadLib().catch(() => {}); };
-  poll(reload, 3000); const ev = () => reload(); window.addEventListener("jobs-changed", ev);
+  let quiet = 0; poll(() => { const busy = LIB.items.some(t => ["queued", "running", "recording"].includes(t.status)); if (busy || ++quiet % 5 === 0) { if (busy) quiet = 0; reload(); } }, 3000); const ev = () => reload(); window.addEventListener("jobs-changed", ev);
   new MutationObserver((_, o) => { if (!libRoot?.isConnected) { window.removeEventListener("jobs-changed", ev); o.disconnect(); } }).observe($app, { childList: true });
 }]);

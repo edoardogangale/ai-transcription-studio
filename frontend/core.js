@@ -13,7 +13,7 @@ const LSJ = { get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d;
 let timers = [];
 const clearTimers = () => { timers.forEach(clearInterval); timers = []; };
 // gli aggiornamenti periodici falliscono in silenzio (es. la registrazione che stai guardando è stata appena eliminata)
-const poll = (fn, ms) => { timers.push(setInterval(() => { try { const r = fn(); if (r && r.catch) r.catch(() => {}); } catch {} }, ms)); };
+const poll = (fn, ms) => { timers.push(setInterval(() => { if (document.hidden) return; try { const r = fn(); if (r && r.catch) r.catch(() => {}); } catch {} }, ms)); };   // scheda in secondo piano: nessuna richiesta
 
 /* ---------- utilità ---------- */
 function h(tag, attrs, ...kids) {
@@ -306,7 +306,10 @@ function startApp() {
   // toccare il link della sezione in cui sei già: ricarica la vista (altrimenti sembrerebbe che il pulsante non faccia nulla)
   document.querySelectorAll(".topbar nav a, .topbar .brand").forEach(a => a.addEventListener("click", () => { if (a.getAttribute("href") === (location.hash || "#/")) route(); }));
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("sw.js").catch(() => {});
-  showWho(); pollActivity(); setInterval(pollActivity, 2000);
+  showWho(); pollActivity();
+  const busy = () => ACT.jobs.length || Object.keys(ACT.downloads).length || (ACT.live && ACT.live.length) || UP.items.some(u => u.state === "uploading" || u.state === "queued") || (window.Recorder && Recorder.state !== "idle");
+  const loop = async () => { await pollActivity(); setTimeout(loop, document.hidden ? 30000 : busy() ? 2000 : 10000); };
+  setTimeout(loop, 2000); document.addEventListener("visibilitychange", () => { if (!document.hidden) pollActivity(); });
   addEventListener("beforeunload", e => { if (UP.items.some(u => u.state === "uploading") || (window.Recorder && Recorder.state !== "idle")) { e.preventDefault(); e.returnValue = ""; } });
   route();
 }

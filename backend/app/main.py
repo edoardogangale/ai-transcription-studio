@@ -27,6 +27,7 @@ async def lifespan(app):
     config.ensure_dirs()
     db.conn()
     live.recover()
+    installer.resume_pending()   # download di modelli rimasti a metà (Codespace spento): riprendono da soli
     engine.start_worker()
     threading.Thread(target=live.reaper, daemon=True).start()
     yield

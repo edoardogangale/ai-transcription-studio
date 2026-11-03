@@ -102,6 +102,7 @@ function actionBar() {
       h("button", { class: "primary", disabled: !doneIds.length, title: "Un solo PDF con tutte le trascrizioni una dopo l'altra", onclick: () => exportBundle(doneIds, "pdf", EXP) }, "⇩ PDF unico"),
       h("button", { disabled: !doneIds.length, onclick: () => exportBundle(doneIds, "docx", EXP) }, "DOCX"),
       h("button", { disabled: !doneIds.length, onclick: () => exportBundle(doneIds, "txt", EXP) }, "TXT"),
+      h("button", { class: "primary", disabled: !doneIds.length, title: "Controlla con l'AI tutte le trascrizioni selezionate: propone correzioni, poi le applichi insieme", onclick: () => aiBatch(doneIds).catch(e => toast(e.message, 7000)) }, "✨ Correggi con AI"),
       h("button", { disabled: !doneIds.length, onclick: () => shareAudio(done.map(t => ({ id: t.id, title: t.title }))) }, "↗ Condividi audio"),
       h("button", { onclick: moveSelected }, "📁 Sposta in…"),
       h("button", { class: "danger", onclick: async () => { if ((await confirmBox(`Eliminare DEFINITIVAMENTE ${ids.length} registrazioni (trascrizioni e file audio)? Quelle ancora in corso verranno fermate.`, { ok: "Elimina", danger: true }))) { try { const r = await api("/api/transcripts/delete", { json: { ids } }); toast(r.deleted === ids.length ? `Eliminate ${r.deleted}` : `Eliminate ${r.deleted} su ${ids.length}`); } catch (e) { showErr("Eliminazione non riuscita: " + e.message); } LIB.sel.clear(); loadLib(true); } } }, "Elimina"),

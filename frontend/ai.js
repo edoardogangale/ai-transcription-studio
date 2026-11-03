@@ -84,3 +84,73 @@ async function buildAIPanel({ id, t, seekTo, reload }) {
   box.append(h("summary", null, h("span", { class: "chip " + lvl[0] }, lvl[1]), " ✨ Correzione con AI"), body); draw(); if (rv && rv.status === "running") watch();
   return box;
 }
+
+/* ---------- Correzione AI di più trascrizioni insieme (selezione multipla nell'Archivio) ----------
+   Parte in coda sul server (una dopo l'altra), propone soltanto; poi si rivedono e si applicano tutte insieme le correzioni scelte. */
+async function aiBatch(ids) {
+  const st = await api("/api/ai/status"), installed = (st.models || []).filter(m => !/embed/i.test(m));
+  if (!st.reachable || !installed.length) {
+    await modal("✨ Correzione con AI", h("div", null, h("p", null, !st.reachable ? "Ollama (il programma gratuito che esegue l'AI) non è in esecuzione su questo computer." : "Nessun modello AI installato."),
+      h("p", { class: "m" }, "Nel terminale del Codespace:  bash scripts/install_ollama.sh  e poi scarica Qwen3 4B da Impostazioni → Correzione con AI (una volta sola). ", h("a", { href: "#/settings", onclick: () => document.querySelector("dialog")?.close() }, "Vai alle impostazioni →"))));
+    return;
+  }
+  const model = h("select", null, installed.map(m => h("option", { value: m, selected: m.startsWith("qwen3:4b") }, m)));
+  const scope = h("select", null, h("option", { value: "flagged" }, "Solo i punti dubbi (più veloce)"), h("option", { value: "all" }, "Tutto il testo (più lento, più completo)"));
+  const off = h("input", { type: "checkbox", checked: true });
+  const instr = h("textarea", { placeholder: "Facoltative. Se le lasci vuote usa quelle della cartella di ogni trascrizione.", style: "min-height:70px" });
+  const cfg = await modal(`✨ Correggi con AI ${ids.length} trascrizioni`, h("div", { class: "grid" },
+    h("p", { class: "m" }, "L'AI controlla le trascrizioni una dopo l'altra (non insieme, per non sovraccaricare il computer) e PROPONE correzioni: non cambia nulla finché non approvi. Alla fine le rivedi e le applichi tutte con un clic."),
+    h("div", null, h("label", null, "Modello"), model), h("div", null, h("label", null, "Cosa controllare"), scope),
+    h("label", { class: "opt" }, off, "Segnala anche le parti fuori tema (le escludi tu)"), h("div", null, h("label", null, "Istruzioni per l'AI"), instr)),
+    [["Annulla", null], [`✨ Avvia su ${ids.length}`, () => ({ model: model.value, scope: scope.value, off: off.checked, instr: instr.value.trim() }), "primary"]]);
+  if (!cfg) return;
+  let res;
+  try { res = await api("/api/ai/review-batch", { json: { ids, model: cfg.model, scope: cfg.scope, instructions: cfg.instr, off_topic: cfg.off } }); }
+  catch (e) { toast(e.message, 7000); return; }
+  if (!res.started.length) { toast("Nessuna trascrizione da controllare: " + (res.skipped.map(s => `${s.title || s.id}: ${s.reason}`).join("; ") || "elenco vuoto"), 8000); return; }
+  if (res.skipped.length) toast(`${res.skipped.length} saltate (${res.skipped.map(s => s.reason).filter((v, i, a) => a.indexOf(v) === i).join(", ")})`, 6000);
+  aiBatchDialog(res.started);
+}
+
+function aiBatchDialog(ids) {
+  const d = h("dialog", { class: "modal wide" }), body = h("div"), foot = h("div", { class: "row", style: "justify-content:flex-end;margin-top:14px" });
+  d.append(h("h3", null, "✨ Correzione AI di " + ids.length + " trascrizioni"), body, foot); document.body.append(d); d.showModal();
+  let iv = null, phase = "run", sel = new Map(), data = new Map(), closed = false;
+  d.addEventListener("close", () => { closed = true; clearInterval(iv); d.remove(); });
+  const chipFor = i => ({ none: ["", "—"], queued: ["", "In coda"], running: ["warn", `In corso ${i.done}/${i.total || "…"}`], done: ["ok", `✓ ${i.edits} ${i.edits === 1 ? "correzione" : "correzioni"} · ${i.off_topic} fuori tema`], cancelled: ["", "Fermata"], error: ["bad", "Errore"] }[i.status] || ["", i.status]);
+  const drawRun = r => {
+    const total = r.items.length, fin = r.items.filter(i => ["done", "error", "cancelled", "none"].includes(i.status)).length;
+    body.replaceChildren(h("div", { class: "bar" }, h("i", { style: `width:${total ? Math.max(3, 100 * fin / total) : 3}%` })), h("p", { class: "m" }, `${fin} di ${total} completate. Puoi chiudere: le proposte restano salvate in ogni trascrizione e si rivedono dal suo pannello «Correzione con AI».`),
+      h("div", { class: "list" }, r.items.map(i => { const [c, t] = chipFor(i); return h("div", { class: "item" }, h("div", { class: "grow t" }, i.title), h("span", { class: "chip " + c }, t), i.error && h("div", { class: "m err" }, i.error)); })));
+    foot.replaceChildren(r.active ? h("button", { class: "danger", onclick: () => api("/api/ai/review-batch/cancel", { method: "POST" }).then(() => toast("Fermo dopo la trascrizione in corso…")) }, "Ferma") : null, h("button", { onclick: () => d.close() }, "Chiudi"));
+  };
+  const review = async r => {
+    phase = "review"; const ok = r.items.filter(i => i.status === "done" && (i.edits || i.off_topic));
+    if (!ok.length) { body.replaceChildren(h("p", null, "✓ Nessuna correzione proposta: i testi sembrano già a posto."), ...(r.items.some(i => i.status === "error") ? [h("p", { class: "err" }, "Alcune trascrizioni hanno dato errore: riprova.")] : [])); foot.replaceChildren(h("button", { onclick: () => d.close() }, "Chiudi")); return; }
+    const full = await Promise.all(ok.map(i => api("/api/transcripts/" + i.id)));
+    full.forEach(t => { const rv = (t.stats || {}).ai_review || { items: [] }, items = rv.items.slice().sort((a, b) => a.start - b.start); data.set(t.id, { t, edits: items.filter(x => !x.off_topic && !x.rejected && x.new !== x.old && !x.applied), offs: items.filter(x => x.off_topic && !x.applied) }); sel.set(t.id, { e: new Set(data.get(t.id).edits.map(x => x.i)), o: new Set() }); });
+    const count = () => [...sel.values()].reduce((s, v) => s + v.e.size + v.o.size, 0);
+    const applyB = h("button", { class: "primary" }), setApply = () => { const n = count(); applyB.textContent = n ? `Applica le ${n} selezionate` : "Nessuna selezionata"; applyB.disabled = !n; };
+    const row = (tid, it, off) => { const set = off ? sel.get(tid).o : sel.get(tid).e; return h("div", { class: "aiitem" }, h("input", { type: "checkbox", checked: set.has(it.i), "aria-label": "Seleziona", onchange: e => { e.target.checked ? set.add(it.i) : set.delete(it.i); setApply(); } }), h("span", { class: "ts" }, fmtT(it.start)), h("div", { class: "grow" }, off ? h("span", null, h("span", { class: "chip warn" }, "fuori tema"), " ", it.old) : wordDiffNodes(it.old, it.new))); };
+    const opened = new Set([...data.keys()].slice(0, 1));   // quali trascrizioni sono aperte (si ricordano quando si ridisegna)
+    const paintReview = () => {
+      body.replaceChildren(h("p", { class: "m" }, "Spunta ciò che vuoi applicare (le correzioni sono già selezionate, i «fuori tema» no). Il testo originale resta salvato. Le correzioni approvate vengono ricordate per le prossime trascrizioni."),
+        h("div", { class: "row", style: "margin:6px 0" }, h("button", { class: "small", onclick: () => { sel.forEach((v, k) => { v.e = new Set(data.get(k).edits.map(x => x.i)); }); paintReview(); } }, "Seleziona tutte le correzioni"), h("button", { class: "small", onclick: () => { sel.forEach(v => { v.e.clear(); v.o.clear(); }); paintReview(); } }, "Deseleziona tutto")),
+        h("div", null, [...data.values()].map(({ t, edits, offs }) => { const det = h("details", { style: "margin:8px 0", ontoggle: () => { det.open ? opened.add(t.id) : opened.delete(t.id); } }, h("summary", null, h("b", null, t.title), h("span", { class: "chip", style: "margin-left:8px" }, `${edits.length} correzioni · ${offs.length} fuori tema`)),
+          h("div", { class: "aiitems" }, edits.map(x => row(t.id, x, false)), offs.map(x => row(t.id, x, true)))); if (opened.has(t.id)) det.open = true; return det; })));
+      setApply();
+    };
+    applyB.onclick = async () => {
+      applyB.disabled = true;
+      try { const out = await api("/api/ai/apply-batch", { json: { items: [...sel].map(([id, v]) => ({ id, edits: [...v.e], off_topic: [...v.o] })).filter(x => x.edits.length || x.off_topic.length) } }); toast(`Applicate ${out.edits} correzioni in ${out.transcripts} trascrizioni, escluse ${out.off_topic} parti.`, 6000); d.close(); if (typeof loadLib === "function") loadLib(true); }
+      catch (e) { toast(e.message, 7000); applyB.disabled = false; }
+    };
+    foot.replaceChildren(applyB, h("button", { onclick: async () => { for (const i of ok) await api(`/api/transcripts/${i.id}/ai-review/discard`, { method: "POST" }).catch(() => {}); toast("Proposte scartate"); d.close(); } }, "Scarta tutte"), h("button", { onclick: () => d.close() }, "Chiudi"));
+    paintReview();
+  };
+  const tick = async () => {
+    if (closed || phase !== "run") return;
+    try { const r = await api("/api/ai/review-status", { json: { ids } }); drawRun(r); if (!r.active && r.items.every(i => ["done", "error", "cancelled", "none"].includes(i.status))) { clearInterval(iv); await review(r); } } catch (e) { /* rete: riprova al prossimo giro */ }
+  };
+  iv = setInterval(tick, 1500); tick();
+}

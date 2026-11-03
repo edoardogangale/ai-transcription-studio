@@ -1313,6 +1313,133 @@ def ai_review(tid: str, b: ReviewIn):
     return {"started": True}
 
 
+# ---- correzione AI di più trascrizioni insieme (in coda, una dopo l'altra; propone soltanto) ----
+_ai_batches: dict = {}
+
+
+class BatchReviewIn(BaseModel):
+    ids: list[str]
+    model: str
+    scope: str = "flagged"
+    instructions: str = ""
+    off_topic: bool = True
+
+
+def _owned_done(tid):
+    t = db.get(tid)
+    if not t or (t.get("owner") or auth.ADMIN_ID) != me():
+        return None, "non trovata"
+    if t["status"] != "done":
+        return None, "non ancora completata"
+    if not (t.get("segments") or []):
+        return None, "senza testo"
+    st = ((t.get("stats") or {}).get("ai_review") or {}).get("status")
+    if st in ("running", "queued"):
+        return None, "già in revisione"
+    return t, None
+
+
+@app.post("/api/ai/review-batch")
+def ai_review_batch(b: BatchReviewIn):
+    if b.scope not in ("flagged", "all"):
+        err(400, "Ambito non valido.")
+    models = llm.installed_models()
+    if models is None:
+        err(409, "Ollama non è in esecuzione su questo computer: avvialo (vedi Impostazioni → Correzione AI).")
+    if b.model not in models:
+        err(409, f"Il modello {b.model} non è installato in Ollama.")
+    owner = me()
+    if owner in _ai_batches:
+        err(409, "Una correzione multipla è già in corso: attendi che finisca o fermala.")
+    ids, skipped = [], []
+    for tid in dict.fromkeys(b.ids):
+        t, why = _owned_done(tid)
+        if why:
+            skipped.append({"id": tid, "title": (db.get(tid) or {}).get("title"), "reason": why})
+            continue
+        st = dict(t.get("stats") or {})
+        st["ai_review"] = {"status": "queued", "model": b.model, "scope": b.scope, "done": 0, "total": 0, "items": [], "failed": 0}
+        db.update(tid, stats=st)
+        ids.append(tid)
+    if not ids:
+        return {"started": [], "skipped": skipped}
+    batch = {"ids": ids, "cancel": False}
+    _ai_batches[owner] = batch
+
+    def run():
+        try:
+            for tid in ids:
+                if batch["cancel"]:
+                    st = (db.get(tid) or {}).get("stats") or {}
+                    if (st.get("ai_review") or {}).get("status") == "queued":
+                        st.pop("ai_review", None)
+                        db.update(tid, stats=st)
+                    continue
+                _ai_cancel[tid] = False
+                try:
+                    llm.review(tid, b.model, b.scope, b.instructions, b.off_topic, owner, lambda tid=tid: batch["cancel"] or _ai_cancel.get(tid, False))
+                except Exception as e:  # un errore su una trascrizione non ferma le altre
+                    st = (db.get(tid) or {}).get("stats") or {}
+                    st["ai_review"] = {"status": "error", "error": f"{type(e).__name__}: {e}"[:200], "items": []}
+                    db.update(tid, stats=st)
+        finally:
+            _ai_batches.pop(owner, None)
+    threading.Thread(target=run, daemon=True, name="ai-batch").start()
+    return {"started": ids, "skipped": skipped}
+
+
+class IdsIn(BaseModel):
+    ids: list[str]
+
+
+@app.post("/api/ai/review-status")
+def ai_review_status(b: IdsIn):
+    out = []
+    for tid in dict.fromkeys(b.ids):
+        t = db.get(tid)
+        if not t or (t.get("owner") or auth.ADMIN_ID) != me():
+            continue
+        rv = (t.get("stats") or {}).get("ai_review") or {}
+        items = rv.get("items") or []
+        out.append({"id": tid, "title": t["title"], "status": rv.get("status") or "none", "done": rv.get("done", 0), "total": rv.get("total", 0),
+                    "failed": rv.get("failed", 0), "error": rv.get("error"),
+                    "edits": sum(1 for i in items if not i.get("off_topic") and not i.get("rejected") and i.get("new") != i.get("old")),
+                    "off_topic": sum(1 for i in items if i.get("off_topic")), "applied": sum(1 for i in items if i.get("applied"))})
+    return {"items": out, "active": me() in _ai_batches}
+
+
+@app.post("/api/ai/review-batch/cancel")
+def ai_review_batch_cancel():
+    b = _ai_batches.get(me())
+    if b:
+        b["cancel"] = True
+    return {"ok": True, "was_active": bool(b)}
+
+
+class BatchApplyItem(BaseModel):
+    id: str
+    edits: list[int] = []
+    off_topic: list[int] = []
+
+
+class BatchApplyIn(BaseModel):
+    items: list[BatchApplyItem]
+
+
+@app.post("/api/ai/apply-batch")
+def ai_apply_batch(b: BatchApplyIn):
+    edits = off = n = 0
+    for it in b.items:
+        t = db.get(it.id)
+        if not t or (t.get("owner") or auth.ADMIN_ID) != me():
+            continue
+        r = llm.apply(it.id, it.edits, it.off_topic, me())
+        edits += r["edits"]
+        off += r["off_topic"]
+        n += 1
+    return {"transcripts": n, "edits": edits, "off_topic": off}
+
+
 @app.post("/api/transcripts/{tid}/ai-review/cancel")
 def ai_review_cancel(tid: str):
     _t(tid)

@@ -330,3 +330,76 @@ def test_passages_group_by_speaker_and_size():
     segs = [{"text": "a" * 400, "speaker": "S0"}, {"text": "b" * 400, "speaker": "S0"}, {"text": "c" * 400, "speaker": "S0"}, {"text": "d" * 10, "speaker": "S1"}]
     g = llm.passages(segs, [0, 1, 2, 3])
     assert g == [[0, 1], [2], [3]]
+
+
+# ------------------------------------------------------------------ correzione AI di più trascrizioni insieme
+def wait_batch(client, ids, secs=15):
+    for _ in range(int(secs * 10)):
+        r = client.post("/api/ai/review-status", json={"ids": ids}).json()
+        if not r["active"] and all(i["status"] in ("done", "error", "cancelled", "none") for i in r["items"]):
+            return r
+        time.sleep(0.1)
+    raise AssertionError("correzione multipla non terminata")
+
+
+def test_batch_review_runs_all_proposes_then_applies_together(client, ollama):
+    a, b, c = mk_transcript(), mk_transcript(), mk_transcript()
+    client.post("/api/folders", json={"name": "x"})
+    r = client.post("/api/ai/review-batch", json={"ids": [a, b, c, a, "nonesiste"], "model": "qwen3:4b", "scope": "all"})
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert j["started"] == [a, b, c] and [s["reason"] for s in j["skipped"]] == ["non trovata"]       # duplicati tolti, id sconosciuto segnalato
+    st = wait_batch(client, [a, b, c])
+    assert [i["status"] for i in st["items"]] == ["done", "done", "done"]
+    assert all(i["edits"] >= 2 and i["off_topic"] == 1 for i in st["items"])
+    for tid in (a, b, c):                                                                              # NIENTE è stato cambiato da solo
+        assert "Cante" in client.get(f"/api/transcripts/{tid}").json()["segments"][0]["text"]
+    # applico insieme le correzioni di due trascrizioni (non della terza)
+    items = []
+    for tid in (a, b):
+        rv = client.get(f"/api/transcripts/{tid}").json()["stats"]["ai_review"]
+        items.append({"id": tid, "edits": [i["i"] for i in rv["items"] if not i["off_topic"] and not i.get("rejected") and i["new"] != i["old"]], "off_topic": []})
+    ap = client.post("/api/ai/apply-batch", json={"items": items}).json()
+    assert ap["transcripts"] == 2 and ap["edits"] >= 4
+    assert "Kant" in client.get(f"/api/transcripts/{a}").json()["segments"][0]["text"]
+    assert "Kant" in client.get(f"/api/transcripts/{b}").json()["segments"][0]["text"]
+    assert "Cante" in client.get(f"/api/transcripts/{c}").json()["segments"][0]["text"]               # la terza resta com'era
+
+
+def test_batch_review_skips_busy_unfinished_and_other_profiles(client, ollama):
+    done = mk_transcript()
+    running = db.insert(title="in corso", upload_id="u", filename="x", audio_path="", duration=1, language="it", model_id="m", context="Altro", options={}, status="running", kind="file", owner="admin", folder_id=None, segments=[], orig_segments=[], has_word_ts=0, stats={})
+    r = client.post("/api/ai/review-batch", json={"ids": [running, done], "model": "qwen3:4b", "scope": "all"}).json()
+    assert r["started"] == [done] and r["skipped"][0]["reason"] == "non ancora completata"
+    wait_batch(client, [done])
+    assert client.post("/api/ai/review-batch", json={"ids": [done], "model": "modello-che-non-c-e"}).status_code == 409
+    assert client.post("/api/ai/review-batch", json={"ids": [done], "model": "qwen3:4b", "scope": "boh"}).status_code == 400
+
+
+def test_batch_cancel_removes_waiting_ones(client, ollama):
+    ids = [mk_transcript() for _ in range(3)]
+    orig = FakeOllama.do_POST
+    def slow(self):
+        time.sleep(0.4)
+        return orig(self)
+    FakeOllama.do_POST = slow
+    try:
+        assert client.post("/api/ai/review-batch", json={"ids": ids, "model": "qwen3:4b", "scope": "all"}).status_code == 200
+        time.sleep(0.3)
+        assert client.post("/api/ai/review-batch/cancel").json()["was_active"] is True
+        st = wait_batch(client, ids, 20)
+        statuses = [i["status"] for i in st["items"]]
+        assert "done" not in statuses[1:] and statuses.count("none") + statuses.count("cancelled") >= 2      # quelle in attesa non partono
+        assert client.post("/api/ai/review-batch", json={"ids": ids[:1], "model": "qwen3:4b", "scope": "all"}).status_code == 200  # si può rilanciare
+        wait_batch(client, ids[:1])
+    finally:
+        FakeOllama.do_POST = orig
+
+
+def test_batch_review_is_private(client, ollama, protected):
+    from test_pages import _data  # noqa: F401
+    sara, _ = mkuser(client, protected, "Sara")
+    mine = mk_transcript()                          # appartiene all'amministratore
+    r = client.post("/api/ai/review-batch", json={"ids": [mine], "model": "qwen3:4b"}, headers=sara).json()
+    assert r["started"] == [] and r["skipped"][0]["reason"] == "non trovata"
+    assert client.post("/api/ai/apply-batch", json={"items": [{"id": mine, "edits": [0]}]}, headers=sara).json()["transcripts"] == 0

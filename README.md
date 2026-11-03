@@ -217,6 +217,9 @@ Voce **✎ Appunti** nel menu. Come l'app «Sul dispositivo» (stesso motore di 
 - ogni profilo ha i propri appunti, privati.
 Test: `tests/e2e/e2e_notes.mjs` (22 controlli, con modello finto), `backend/tests/test_pages.py`. Il motore `ink.js` esiste in due copie (`ondevice/` e `frontend/`) che devono restare identiche (c'è un test).
 
+## Correzione AI di più trascrizioni insieme
+Nell'Archivio seleziona più registrazioni → **✨ Correggi con AI**: scegli modello e ambito (solo i punti dubbi, oppure tutto il testo). Il server le elabora **in coda, una dopo l'altra** (non insieme, per non sovraccaricare il computer) e **propone soltanto**: alla fine si apre una revisione unica con le correzioni già spuntate (i «fuori tema» no), le sistemi come vuoi e premi **Applica le N selezionate**. Puoi chiudere la finestra durante l'elaborazione: le proposte restano in ogni trascrizione. Test: `backend/tests/test_users_ai.py` (batch) e `tests/e2e/e2e_aibatch.mjs` (con un finto Ollama).
+
 ## Privacy
 
 Tutto è locale (`data/`: audio, database, pesi). Nessuna telemetria. Accessi di rete: solo il download dei pesi da GitHub (su tua richiesta) e, se lo usi, Ollama su `127.0.0.1`. Eliminare una trascrizione rimuove **definitivamente** anche l'audio (se non usato da altre). Funziona in qualunque stato: anche se è in elaborazione o con una registrazione live ancora aperta (viene fermata e scartata). La conferma è dentro l'app (niente finestre del browser) e ogni errore è mostrato a schermo; "Seleziona tutto" include anche gli elementi in corso.

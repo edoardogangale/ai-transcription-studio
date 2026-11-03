@@ -226,3 +226,5 @@ html.touch .nb-bar button:not(.sw){min-width:44px;justify-content:center}
 .notes-full .rectime{font-variant-numeric:tabular-nums;color:#ff3b30;font-weight:600;padding:0 8px;white-space:nowrap}
 .notes-full .nhead [hidden]{display:none!important}
 .notes-full .ib.small{font-size:20px}
+
+dialog.modal.wide{width:min(900px,96vw);max-width:min(900px,96vw);max-height:90vh;overflow:auto}

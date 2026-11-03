@@ -26,6 +26,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(tid UNINDEXED, title, body, to
 CREATE TABLE IF NOT EXISTS vocab2(id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT, term TEXT, context TEXT, UNIQUE(owner, term, context));
 CREATE TABLE IF NOT EXISTS corrections(id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT, scope TEXT, wrong TEXT, right TEXT, n INTEGER DEFAULT 1, UNIQUE(owner, scope, wrong, right));
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS pages(id TEXT PRIMARY KEY, owner TEXT, title TEXT, folder_id TEXT, tid TEXT, text TEXT, created REAL, updated REAL, data TEXT);
+CREATE INDEX IF NOT EXISTS ix_pages_owner ON pages(owner, updated);
 """
 
 JSON_COLS = {"options", "partial", "segments", "orig_segments", "stats", "prefs", "notebook"}
@@ -183,6 +185,7 @@ def folder_delete(fid):
     c = conn()
     c.execute("UPDATE folders SET parent_id=? WHERE parent_id=?", (f["parent_id"], fid))
     c.execute("UPDATE transcripts SET folder_id=? WHERE folder_id=?", (f["parent_id"], fid))
+    c.execute("UPDATE pages SET folder_id=? WHERE folder_id=?", (f["parent_id"], fid))
     c.execute("DELETE FROM folders WHERE id=?", (fid,))
     c.commit()
 
@@ -314,7 +317,64 @@ def purge_owner(owner):
         c.execute("DELETE FROM fts WHERE tid=?", (tid,))
     c.execute("DELETE FROM transcripts WHERE owner=?", (owner,))
     c.execute("DELETE FROM folders WHERE owner=?", (owner,))
+    c.execute("DELETE FROM pages WHERE owner=?", (owner,))
     c.execute("DELETE FROM vocab2 WHERE owner=?", (owner,))
     c.execute("DELETE FROM corrections WHERE owner=?", (owner,))
     c.commit()
     return ups
+
+
+# ---------------------------------------------------------------- appunti (pagine a mano libera, per cartella)
+def page_text(data):
+    return " ".join((x.get("text") or "") for x in (data.get("texts") or []))[:20000]
+
+
+def page_add(owner, title, folder_id, data, tid=None):
+    pid = new_id()
+    now = time.time()
+    c = conn()
+    c.execute("INSERT INTO pages(id,owner,title,folder_id,tid,text,created,updated,data) VALUES(?,?,?,?,?,?,?,?,?)",
+              (pid, owner, (title or "Nota").strip()[:120], folder_id, tid, page_text(data), now, now, json.dumps(data)))
+    c.commit()
+    return pid
+
+
+def page_row(r, with_data=False):
+    if not r:
+        return None
+    d = {k: r[k] for k in ("id", "owner", "title", "folder_id", "tid", "created", "updated")}
+    if with_data:
+        d["data"] = json.loads(r["data"] or "{}")
+    return d
+
+
+def page_get(pid, owner=None):
+    r = conn().execute("SELECT * FROM pages WHERE id=?" + (" AND owner=?" if owner else ""), (pid, owner) if owner else (pid,)).fetchone()
+    return page_row(r, True)
+
+
+def page_list(owner, q=None):
+    rows = conn().execute("SELECT * FROM pages WHERE owner=? ORDER BY updated DESC", (owner,)).fetchall()
+    out = []
+    ql = (q or "").strip().lower()
+    for r in rows:
+        if ql and ql not in (r["title"] or "").lower() and ql not in (r["text"] or "").lower():
+            continue
+        out.append(r)
+    return out
+
+
+def page_update(pid, **f):
+    if "data" in f:
+        f["text"] = page_text(f["data"])
+        f["data"] = json.dumps(f["data"])
+    f["updated"] = time.time()
+    c = conn()
+    c.execute(f"UPDATE pages SET {','.join(k + '=?' for k in f)} WHERE id=?", [*f.values(), pid])
+    c.commit()
+
+
+def page_delete(pid):
+    c = conn()
+    c.execute("DELETE FROM pages WHERE id=?", (pid,))
+    c.commit()

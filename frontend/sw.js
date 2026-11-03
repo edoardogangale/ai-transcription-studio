@@ -1,6 +1,6 @@
 // Service worker minimale: mette in cache solo la shell statica. Le chiamate /api non sono mai in cache.
-const CACHE = "ats-shell-v7";
-const SHELL = ["./", "style.css", "core.js", "library.js", "new.js", "live.js", "ai.js", "editor.js", "notebook.js", "misc.js", "icon.svg", "manifest.json"];
+const CACHE = "ats-shell-v8";
+const SHELL = ["./", "style.css", "core.js", "library.js", "new.js", "live.js", "ai.js", "editor.js", "notebook.js", "notes.js", "ink.js", "misc.js", "icon.svg", "manifest.json"];
 self.addEventListener("install", e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())));
 self.addEventListener("activate", e => e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())));
 self.addEventListener("fetch", e => {

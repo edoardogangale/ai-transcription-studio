@@ -34,7 +34,7 @@ await p.mouse.move(100, 100); const s0 = await box(); await p.mouse.move(s0.x + 
 await touch([["pointerdown", 11, 900, 300]]); await p.waitForTimeout(800); const quick = await p.locator(".ink-quick").count(); await touch([["pointerup", 11, 900, 300]]); ok("pressione lunga col dito → strumenti rapidi", quick === 1);
 await p.click(".ink-quick [aria-label=Evidenziatore]"); await draw([[180, 210], [400, 230]]); pg = await cur(); ok("evidenziatore dagli strumenti rapidi", pg.strokes.at(-1).t === "marker");
 const nBefore = pg.strokes.length; await p.click("[aria-label='Scambia strumento']"); await draw([[700, 640], [800, 670], [900, 640]]); pg = await cur(); ok("⇄ passa alla gomma e cancella", pg.strokes.length < nBefore, `${nBefore}→${pg.strokes.length}`);
-await p.click("[aria-label='Scambia strumento']"); ok("⇄ torna all'evidenziatore", await p.locator(".tool.on[aria-label=Evidenziatore]").count() === 1);
+await p.click("[aria-label='Scambia strumento']"); ok("⇄ torna all'evidenziatore", await p.locator(".itool.on[aria-label=Evidenziatore]").count() === 1);
 await p.click("[aria-label=Penna]"); await p.click("[aria-label=Penna]"); ok("secondo tocco sullo strumento = spessore", await p.locator(".ink-pop input[type=range]").count() === 1); await p.click("[aria-label=Penna]");
 await p.click("[aria-label=Stilografica]"); await draw([[200, 850], [260, 820], [320, 880], [380, 830]]); pg = await cur(); ok("stilografica", pg.strokes.at(-1).t === "fountain");
 await p.click("[aria-label=Gomma]"); await p.click("[aria-label=Gomma]"); await p.click("text=Gomma a pixel"); await p.click("[aria-label=Gomma]");
@@ -46,7 +46,7 @@ await draw([[270, 700], [370, 760]]); pg = await cur(); const sq2 = pg.strokes.f
 await p.click(".ink-selmenu >> text=Fine");
 await p.click("[aria-label=Testo]"); const s2 = await box(); await p.mouse.click(s2.x + 650, s2.y + 820); await p.keyboard.type("Bastiglia 1789"); await p.click("[aria-label=Penna]"); pg = await cur(); ok("casella di testo", pg.texts.some(t => t.text === "Bastiglia 1789"), JSON.stringify(pg.texts));
 await p.click("[aria-label=Foglio]"); await p.click(".ink-pop >> text=Quadretti"); await p.click(".ink-pop >> text=Allarga →"); pg = await cur(); ok("carta a quadretti + foglio allargato", pg.paper.type === "grid" && pg.w > 820, `${pg.paper.type} ${pg.w}`);
-await p.click("[aria-label=Righello]"); await p.waitForTimeout(200); ok("righello visibile", await p.locator(".tool.on[aria-label=Righello]").count() === 1);
+await p.click("[aria-label=Righello]"); await p.waitForTimeout(200); ok("righello visibile", await p.locator(".itool.on[aria-label=Righello]").count() === 1);
 await p.click("[aria-label=Matita]");
 await p.evaluate(() => { const st = document.querySelector(".ink-stage"), r = st.getBoundingClientRect(); const ev = (type, x, y, b, alt) => st.dispatchEvent(new PointerEvent(type, { pointerId: 5, pointerType: "pen", isPrimary: true, clientX: r.left + x, clientY: r.top + y, buttons: b, pressure: b ? 0.6 : 0, altitudeAngle: alt, bubbles: true, cancelable: true })); ev("pointermove", 900, 500, 0, 1.5); ev("pointerdown", 900, 500, 1, 0.35); for (let i = 1; i < 30; i++) ev("pointermove", 900 + i * 6, 500 + Math.sin(i / 3) * 30, 1, 0.35); ev("pointerup", 1080, 500, 0, 0.35); ev("pointermove", 700, 300, 0, 1.2); });
 pg = await cur(); const pen = pg.strokes.at(-1); ok("matita inclinata = ombreggiatura (tratto largo)", pen.t === "pencil" && pen.pts[2] >= 1, pen.pts.slice(0, 3).join(","));

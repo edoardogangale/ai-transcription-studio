@@ -355,7 +355,7 @@ export function createNotebook(host, page, opts = {}) {
     selMenu.replaceChildren(
       el("button", { onclick: () => { pushUndo(); page.strokes = page.strokes.filter(s => !sel.ids.has(s.id)); page.texts = page.texts.filter(t => !sel.tids.has(t.id)); sel = null; renderTexts(); showSelMenu(); changed(); } }, "Elimina"),
       el("button", { onclick: () => { pushUndo(); const ids = new Set(), tids = new Set(); for (const s of page.strokes.filter(s => sel.ids.has(s.id))) { const n = makeStroke(s.t, s.c, s.s, s.pts.map((v, i) => i % 3 === 2 ? v : v + 30)); page.strokes.push(n); ids.add(n.id); } for (const t of page.texts.filter(t => sel.tids.has(t.id))) { const n = { ...t, id: uid(), x: t.x + 30, y: t.y + 30 }; page.texts.push(n); tids.add(n.id); } sel = { ids, tids }; renderTexts(); changed(); } }, "Duplica"),
-      ...COLORS.slice(0, 5).map(c => el("button", { class: "dot", style: `background:${c}`, "aria-label": "Colore " + c, onclick: () => { pushUndo(); page.strokes = page.strokes.map(s => sel.ids.has(s.id) && s.t !== "marker" ? Object.assign(makeStroke(s.t, c, s.s, s.pts), { id: s.id }) : s); page.texts.forEach(t => { if (sel.tids.has(t.id)) t.color = c; }); renderTexts(); changed(); } })),
+      ...COLORS.slice(0, 5).map(c => el("button", { class: "idot", style: `background:${c}`, "aria-label": "Colore " + c, onclick: () => { pushUndo(); page.strokes = page.strokes.map(s => sel.ids.has(s.id) && s.t !== "marker" ? Object.assign(makeStroke(s.t, c, s.s, s.pts), { id: s.id }) : s); page.texts.forEach(t => { if (sel.tids.has(t.id)) t.color = c; }); renderTexts(); changed(); } })),
       el("button", { onclick: () => { sel = null; renderTexts(); showSelMenu(); dirty = true; schedule(); } }, "Fine"));
     stage.append(selMenu);
   }
@@ -525,7 +525,7 @@ export function createNotebook(host, page, opts = {}) {
     closeQuick();
     quick = el("div", { class: "ink-quick", style: `left:${clamp(sx - 150, 8, W - 308)}px;top:${clamp(sy - 120, 8, H - 130)}px` },
       el("div", { class: "row" }, ...["pen", "fountain", "pencil", "marker", "eraser", "lasso"].map(t => el("button", { class: "qt" + (st.tool === t ? " on" : ""), "aria-label": TOOLS[t][0], html: svg(t, colorOf(t)), onclick: () => { setTool(t); closeQuick(); } }))),
-      el("div", { class: "row" }, ...(st.tool === "marker" ? HL_COLORS : COLORS).map(c => el("button", { class: "dot", style: `background:${c}`, "aria-label": "Colore " + c, onclick: () => { st.colors[st.tool === "eraser" || st.tool === "lasso" ? "pen" : st.tool] = c; persist(); buildBar(); closeQuick(); } }))));
+      el("div", { class: "row" }, ...(st.tool === "marker" ? HL_COLORS : COLORS).map(c => el("button", { class: "idot", style: `background:${c}`, "aria-label": "Colore " + c, onclick: () => { st.colors[st.tool === "eraser" || st.tool === "lasso" ? "pen" : st.tool] = c; persist(); buildBar(); closeQuick(); } }))));
     stage.append(quick);
   }
 
@@ -540,9 +540,9 @@ export function createNotebook(host, page, opts = {}) {
   top.append(...(opts.header ? [opts.header] : []), el("div", { class: "grow" }), undoB, redoB, swapB, paperB, moreB); updUndo();
   let pop = null; const closePop = () => { if (pop) { pop.remove(); pop = null; } };
   function popup(anchor, ...kids) { closePop(); pop = el("div", { class: "ink-pop" }, ...kids); root.append(pop); const r = anchor.getBoundingClientRect(), rr = root.getBoundingClientRect(); pop.style.left = clamp(r.left - rr.left - 120, 8, rr.width - 288) + "px"; if (anchor.closest(".ink-bar")) pop.style.bottom = (rr.bottom - r.top + 8) + "px"; else pop.style.top = (r.bottom - rr.top + 8) + "px"; }
-  root.addEventListener("pointerdown", e => { if (pop && !e.target.closest(".ink-pop, .ib, .tool")) closePop(); }, true);
+  root.addEventListener("pointerdown", e => { if (pop && !e.target.closest(".ink-pop, .ib, .itool")) closePop(); }, true);
   function paperMenu() {
-    const p = page.paper; const seg = (vals, curv, fn) => el("div", { class: "seg" }, ...Object.entries(vals).map(([k, v]) => el("button", { class: curv === k ? "on" : "", onclick: () => { pushUndo(); fn(k); changed(); paperMenu(); } }, v)));
+    const p = page.paper; const seg = (vals, curv, fn) => el("div", { class: "iseg" }, ...Object.entries(vals).map(([k, v]) => el("button", { class: curv === k ? "on" : "", onclick: () => { pushUndo(); fn(k); changed(); paperMenu(); } }, v)));
     popup(paperB, el("b", null, "Foglio"), seg(PAPERS, p.type, k => p.type = k),
       el("div", { class: "mut" }, "Distanza righe"), seg({ 24: "Stretta", 32: "Media", 44: "Larga" }, String(p.gap), k => p.gap = +k),
       el("div", { class: "mut" }, "Colore"), seg({ "#ffffff": "Bianco", "#fdf8e7": "Crema", "#1c1c1e": "Scuro" }, p.color, k => p.color = k),
@@ -557,18 +557,18 @@ export function createNotebook(host, page, opts = {}) {
   }
   function buildBar() {
     const t = st.tool;
-    const tools = ["pen", "fountain", "pencil", "marker", "eraser", "lasso", "text"].map(k => el("button", { class: "tool" + (t === k ? " on" : ""), "aria-label": TOOLS[k][0], title: TOOLS[k][0], html: svg(k, colorOf(k)), onclick: ev => { if (st.tool === k) toolPop(ev.currentTarget, k); else setTool(k); } }));
-    const ruler = el("button", { class: "tool" + (st.ruler ? " on" : ""), "aria-label": "Righello", title: "Righello", html: svg("ruler"), onclick: () => { st.ruler = st.ruler ? null : { cx: W / 2, cy: H / 2, a: -Math.PI / 12 }; buildBar(); schedule(); } });
-    const pal = (t === "marker" ? HL_COLORS : COLORS).map(c => el("button", { class: "dot" + (colorOf(t === "eraser" || t === "lasso" || t === "text" ? "pen" : t) === c ? " on" : ""), style: `background:${c}`, "aria-label": "Colore " + c, onclick: () => { st.colors[t === "eraser" || t === "lasso" ? "pen" : t] = c; persist(); buildBar(); } }));
+    const tools = ["pen", "fountain", "pencil", "marker", "eraser", "lasso", "text"].map(k => el("button", { class: "itool" + (t === k ? " on" : ""), "aria-label": TOOLS[k][0], title: TOOLS[k][0], html: svg(k, colorOf(k)), onclick: ev => { if (st.tool === k) toolPop(ev.currentTarget, k); else setTool(k); } }));
+    const ruler = el("button", { class: "itool" + (st.ruler ? " on" : ""), "aria-label": "Righello", title: "Righello", html: svg("ruler"), onclick: () => { st.ruler = st.ruler ? null : { cx: W / 2, cy: H / 2, a: -Math.PI / 12 }; buildBar(); schedule(); } });
+    const pal = (t === "marker" ? HL_COLORS : COLORS).map(c => el("button", { class: "idot" + (colorOf(t === "eraser" || t === "lasso" || t === "text" ? "pen" : t) === c ? " on" : ""), style: `background:${c}`, "aria-label": "Colore " + c, onclick: () => { st.colors[t === "eraser" || t === "lasso" ? "pen" : t] = c; persist(); buildBar(); } }));
     const custom = el("input", { type: "color", class: "wheel-in", "aria-label": "Altro colore", value: colorOf(t === "marker" ? "marker" : "pen"), oninput: e => { st.colors[t === "eraser" || t === "lasso" ? "pen" : t] = e.target.value; persist(); } , onchange: () => buildBar() });
     const sizes = (t === "lasso" || t === "text") ? [] : [0.5, 1, 2].map(m => { const base = TOOLS[t][1], v = +(base * m).toFixed(1); return el("button", { class: "sz" + (Math.abs(sizeOf(t) - v) < 0.05 ? " on" : ""), "aria-label": "Spessore " + v, onclick: () => { st.sizes[t] = v; persist(); buildBar(); } }, el("i", { style: `width:${4 + m * 5}px;height:${4 + m * 5}px` })); });
-    bar.replaceChildren(el("div", { class: "grp tools" }, ...tools, ruler), el("div", { class: "sep" }), el("div", { class: "grp" }, ...pal, el("label", { class: "wheel" }, custom)), el("div", { class: "sep" }), el("div", { class: "grp" }, ...sizes));
+    bar.replaceChildren(el("div", { class: "grp itools" }, ...tools, ruler), el("div", { class: "sep" }), el("div", { class: "grp" }, ...pal, el("label", { class: "wheel" }, custom)), el("div", { class: "sep" }), el("div", { class: "grp" }, ...sizes));
   }
   function toolPop(anchor, k) {
     const range = el("input", { type: "range", min: k === "eraser" ? 4 : 0.5, max: k === "eraser" ? 60 : k === "marker" ? 20 : 14, step: 0.5, value: sizeOf(k), oninput: e => { st.sizes[k] = +e.target.value; persist(); val.textContent = e.target.value; }, onchange: () => buildBar() });
     const val = el("span", null, String(sizeOf(k)));
     popup(anchor, el("b", null, TOOLS[k][0]), k !== "lasso" && k !== "text" && el("div", { class: "row" }, "Spessore ", range, val),
-      k === "eraser" && el("div", { class: "seg" }, ...[["object", "Gomma a oggetto"], ["pixel", "Gomma a pixel"]].map(([m, n]) => el("button", { class: st.eraserMode === m ? "on" : "", onclick: () => { st.eraserMode = m; persist(); toolPop(anchor, k); } }, n))),
+      k === "eraser" && el("div", { class: "iseg" }, ...[["object", "Gomma a oggetto"], ["pixel", "Gomma a pixel"]].map(([m, n]) => el("button", { class: st.eraserMode === m ? "on" : "", onclick: () => { st.eraserMode = m; persist(); toolPop(anchor, k); } }, n))),
       k === "text" && el("div", { class: "mut" }, "Tocca il foglio per scrivere con la tastiera."), k === "lasso" && el("div", { class: "mut" }, "Cerchia tratti o testi, poi trascinali."));
   }
 
@@ -633,13 +633,13 @@ export const INK_CSS = `
 .ink-bar{position:absolute;left:50%;bottom:calc(14px + env(safe-area-inset-bottom));transform:translateX(-50%);max-width:calc(100% - 24px);display:flex;gap:6px;align-items:flex-end;overflow-x:auto;overflow-y:hidden;padding:0 14px;height:80px;background:rgba(250,250,252,.88);backdrop-filter:saturate(180%) blur(24px);-webkit-backdrop-filter:saturate(180%) blur(24px);border-radius:24px;box-shadow:0 0 0 .5px rgba(0,0,0,.12),0 10px 34px rgba(0,0,0,.18);z-index:4;scrollbar-width:none}
 .ink-bar::-webkit-scrollbar{display:none}
 .ink-bar .grp{display:flex;align-items:center;gap:1px;flex-shrink:0;height:80px}
-.ink-bar .grp.tools{align-items:flex-end;overflow:hidden}
+.ink-bar .grp.itools{align-items:flex-end;overflow:hidden}
 .ink-bar .sep{width:1px;height:34px;background:rgba(60,60,67,.18);align-self:center;flex-shrink:0;margin:0 4px}
-.ink .tool{border:0;background:transparent;padding:0 2px;margin:0;height:72px;display:flex;align-items:flex-start;transform:translateY(16px);transition:transform .28s cubic-bezier(.3,.8,.3,1.25);filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.18))}
-.ink .tool svg{display:block}.ink .tool.on{transform:translateY(0)}
-.ink .dot{width:26px;height:26px;min-height:26px;border-radius:50%;border:0;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.2);padding:0;margin:0 4px;transition:transform .15s}
-.ink .dot:active{transform:scale(.88)}
-.ink .dot.on{box-shadow:0 0 0 2.5px #fff,0 0 0 4.5px rgba(60,60,67,.45)}
+.ink .itool{border:0;background:transparent;padding:0 2px;margin:0;height:72px;display:flex;align-items:flex-start;transform:translateY(16px);transition:transform .28s cubic-bezier(.3,.8,.3,1.25);filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.18))}
+.ink .itool svg{display:block}.ink .itool.on{transform:translateY(0)}
+.ink .idot{width:26px;height:26px;min-height:26px;border-radius:50%;border:0;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.2);padding:0;margin:0 4px;transition:transform .15s}
+.ink .idot:active{transform:scale(.88)}
+.ink .idot.on{box-shadow:0 0 0 2.5px #fff,0 0 0 4.5px rgba(60,60,67,.45)}
 .ink .wheel{position:relative;width:26px;height:26px;border-radius:50%;margin:0 4px;background:conic-gradient(#ff3b30,#ff9500,#ffcc00,#34c759,#5ac8fa,#007aff,#af52de,#ff2d55,#ff3b30);box-shadow:inset 0 0 0 .5px rgba(0,0,0,.2);flex-shrink:0}
 .ink .wheel-in{position:absolute;inset:0;opacity:0;width:100%;height:100%;margin:0;padding:0;border:0}
 .ink .sz{width:30px;height:40px;min-height:40px;border:0;background:transparent;display:flex;align-items:center;justify-content:center;padding:0;margin:0;border-radius:9px}
@@ -647,8 +647,8 @@ export const INK_CSS = `
 .ink-pop{position:absolute;z-index:6;width:280px;background:rgba(255,255,255,.94);backdrop-filter:saturate(180%) blur(24px);-webkit-backdrop-filter:saturate(180%) blur(24px);border-radius:14px;box-shadow:0 0 0 .5px rgba(0,0,0,.1),0 12px 40px rgba(0,0,0,.22);padding:12px;display:flex;flex-direction:column;gap:8px;animation:inkPop .2s cubic-bezier(.3,.8,.3,1.15);transform-origin:50% 100%}
 .ink-pop button{min-height:40px;border-radius:9px;border:0;background:rgba(118,118,128,.12);color:#1c1c1e;font:inherit;font-size:15px;margin:0;padding:6px 10px}
 .ink-pop button.danger{background:rgba(255,59,48,.12);color:#d70015}.ink-pop .mut{color:#8e8e93;font-size:13px}
-.ink-pop .seg{display:flex;background:rgba(118,118,128,.12);border-radius:9px;padding:2px;gap:2px}.ink-pop .seg button{flex:1;background:transparent;font-size:13px;padding:4px;min-height:32px}
-.ink-pop .seg button.on{background:#fff;box-shadow:0 3px 8px rgba(0,0,0,.12),0 0 0 .5px rgba(0,0,0,.04)}
+.ink-pop .iseg{display:flex;background:rgba(118,118,128,.12);border-radius:9px;padding:2px;gap:2px}.ink-pop .iseg button{flex:1;background:transparent;font-size:13px;padding:4px;min-height:32px}
+.ink-pop .iseg button.on{background:#fff;box-shadow:0 3px 8px rgba(0,0,0,.12),0 0 0 .5px rgba(0,0,0,.04)}
 .ink-pop .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.ink-pop input[type=range]{flex:1;accent-color:var(--tint)}
 .ink-quick{position:absolute;z-index:7;background:rgba(250,250,252,.92);backdrop-filter:saturate(180%) blur(24px);-webkit-backdrop-filter:saturate(180%) blur(24px);border-radius:22px;box-shadow:0 0 0 .5px rgba(0,0,0,.1),0 14px 40px rgba(0,0,0,.25);padding:6px 10px 8px;display:flex;flex-direction:column;gap:6px;animation:inkPop .22s cubic-bezier(.3,.8,.3,1.3)}
 .ink-quick .row{display:flex;gap:2px;align-items:flex-end;justify-content:center}
@@ -656,7 +656,7 @@ export const INK_CSS = `
 .ink-selmenu{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:5;display:flex;gap:2px;align-items:center;background:rgba(30,30,30,.92);backdrop-filter:blur(20px);border-radius:10px;padding:3px 5px;box-shadow:0 8px 24px rgba(0,0,0,.3)}
 .ink-selmenu button{background:transparent;color:#fff;border:0;min-height:36px;font:inherit;font-size:15px;padding:0 10px;margin:0;border-radius:7px}
 .ink-selmenu button:active{background:rgba(255,255,255,.15)}
-.ink-selmenu .dot{width:20px;height:20px;min-height:20px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.4)}
+.ink-selmenu .idot{width:20px;height:20px;min-height:20px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.4)}
 .ink-toast{position:absolute;top:14px;left:50%;transform:translate(-50%,-10px);background:rgba(28,28,30,.82);backdrop-filter:blur(10px);color:#fff;padding:6px 14px;border-radius:20px;font-size:14px;opacity:0;transition:.25s;pointer-events:none;z-index:6}
 .ink-toast.show{opacity:1;transform:translate(-50%,0)}
 @keyframes inkPop{from{opacity:0;transform:scale(.9)}to{opacity:1;transform:none}}

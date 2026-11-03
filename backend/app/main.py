@@ -318,6 +318,116 @@ def move(m: MoveIn):
     return {"ok": True, "moved": len(ids)}
 
 
+# ---------------------------------------------------------------- appunti (pagine a mano libera con cartelle)
+MAX_PAGE_BYTES = 30 * 1024 * 1024
+
+
+def _page_data(d):
+    d = d or {}
+    if not isinstance(d, dict) or not isinstance(d.get("strokes", []), list) or not isinstance(d.get("texts", []), list):
+        err(422, "Dati della pagina non validi.")
+    if len(json.dumps(d)) > MAX_PAGE_BYTES:
+        err(413, "La pagina è troppo grande.")
+    w = min(max(float(d.get("w") or 820), 300), 8000)
+    h = min(max(float(d.get("h") or 1160), 300), 40000)
+    return {"w": w, "h": h, "paper": d.get("paper") or {"type": "lines", "gap": 32, "color": "#ffffff"},
+            "strokes": d.get("strokes") or [], "texts": d.get("texts") or [], "seg_n": int(d.get("seg_n") or 0), "seg_end": float(d.get("seg_end", -1))}
+
+
+def _pg(pid):
+    p = db.page_get(pid, me())
+    if not p:
+        err(404, "Nota non trovata.")
+    return p
+
+
+def _page_preview(p):
+    """Solo la parte alta della pagina (serve alla miniatura): la lista resta leggera anche con molte note."""
+    d = p["data"]
+    lim = float(d.get("w") or 820) * 1.3 + 40
+    return {"w": d.get("w"), "h": d.get("h"), "paper": d.get("paper"),
+            "strokes": [s for s in d.get("strokes", []) if (s.get("bb") or [0, 0])[1] <= lim],
+            "texts": [x for x in d.get("texts", []) if (x.get("y") or 0) <= lim]}
+
+
+class PageIn(BaseModel):
+    title: str | None = None
+    folder_id: str | None = None
+    tid: str | None = None
+    data: dict | None = None
+
+
+class PagePatch(BaseModel):
+    title: str | None = None
+    folder_id: str | None = None
+    set_folder: bool = False
+    tid: str | None = None
+    data: dict | None = None
+
+
+@app.get("/api/pages")
+def pages_list(folder_id: str | None = None, unfiled: bool = False, recursive: bool = True, q: str | None = None):
+    ids = None
+    if folder_id:
+        _fo(folder_id)
+        ids = db.folder_descendants(folder_id) if recursive else {folder_id}
+    out = []
+    for r in db.page_list(me(), q):
+        if unfiled and r["folder_id"]:
+            continue
+        if ids is not None and r["folder_id"] not in ids:
+            continue
+        p = db.page_row(r, True)
+        p["preview"] = _page_preview(p)
+        p["strokes"] = len(p["data"].get("strokes", []))
+        del p["data"]
+        out.append(p)
+    return {"pages": out}
+
+
+@app.post("/api/pages")
+def pages_new(b: PageIn):
+    if b.folder_id:
+        _fo(b.folder_id)
+    if b.tid:
+        _t(b.tid)
+    pid = db.page_add(me(), b.title, b.folder_id, _page_data(b.data), b.tid)
+    return db.page_get(pid, me())
+
+
+@app.get("/api/pages/{pid}")
+def pages_get(pid: str):
+    p = _pg(pid)
+    p["folder_path"] = _folder_path(p.get("folder_id"))
+    return p
+
+
+@app.put("/api/pages/{pid}")
+def pages_save(pid: str, b: PagePatch):
+    _pg(pid)
+    fields = {}
+    if b.title is not None:
+        fields["title"] = b.title.strip()[:120] or "Nota"
+    if b.set_folder:
+        if b.folder_id:
+            _fo(b.folder_id)
+        fields["folder_id"] = b.folder_id
+    if b.tid is not None:
+        _t(b.tid)
+        fields["tid"] = b.tid
+    if b.data is not None:
+        fields["data"] = _page_data(b.data)
+    db.page_update(pid, **fields)
+    return {"ok": True, "updated": db.page_get(pid, me())["updated"]}
+
+
+@app.delete("/api/pages/{pid}")
+def pages_del(pid: str):
+    _pg(pid)
+    db.page_delete(pid)
+    return {"ok": True}
+
+
 # ---------------------------------------------------------------- upload
 @app.post("/api/upload")
 async def upload(file: UploadFile = File(...)):

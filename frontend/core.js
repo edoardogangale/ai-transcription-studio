@@ -106,7 +106,7 @@ const ROUTES = [];
 async function route() {
   clearTimers();
   const hash = location.hash || "#/";
-  const sect = hash.startsWith("#/models") ? "models" : hash.startsWith("#/settings") ? "settings" : hash.startsWith("#/live") ? "live" : "";
+  const sect = hash.startsWith("#/note") ? "notes" : hash.startsWith("#/models") ? "models" : hash.startsWith("#/settings") ? "settings" : hash.startsWith("#/live") ? "live" : "";
   document.querySelectorAll("[data-nav]").forEach(a => a.classList.toggle("active", a.dataset.nav === sect));
   for (const [re, fn] of ROUTES) {
     const m = hash.match(re);

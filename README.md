@@ -209,6 +209,14 @@ Il mock (`STUDIO_ENABLE_MOCK=1`) aggiunge due schede "MOCK" chiaramente etichett
 - **Licenze** dei modelli: riportate da fonti terze, da confermare sulle model card. Ollama/appunti con LLM presente non provato (solo il caso "assente").
 - Audio di durata 2–3 ore con modelli veri: la segmentazione è provata su 190 minuti sintetici, l'inferenza reale solo su file brevi.
 
+## Appunti a mano libera (con cartelle) e registrazione live scritta nella pagina
+
+Voce **✎ Appunti** nel menu. Come l'app «Sul dispositivo» (stesso motore di scrittura: Apple Pencil, dito che scorre e zooma, strumenti, forme, righello, lazo…), ma qui:
+- le note sono salvate **sul server**, con le stesse **cartelle (materie → argomenti)** dell'Archivio: puoi sceglierle, spostarle, cercare nei titoli e nel testo;
+- nella nota c'è **● Registra**: la trascrizione live **si scrive dentro la pagina** (testo vero, modificabile, con paragrafi/pause in viola) usando i **modelli del server** (Parakeet, Whisper…), e puoi chiedere a fine registrazione di ritrascrivere l'audio con un modello più accurato; l'audio e la trascrizione completa vanno anche nell'Archivio («🎙 Trascrizione» nella nota);
+- ogni profilo ha i propri appunti, privati.
+Test: `tests/e2e/e2e_notes.mjs` (22 controlli, con modello finto), `backend/tests/test_pages.py`. Il motore `ink.js` esiste in due copie (`ondevice/` e `frontend/`) che devono restare identiche (c'è un test).
+
 ## Privacy
 
 Tutto è locale (`data/`: audio, database, pesi). Nessuna telemetria. Accessi di rete: solo il download dei pesi da GitHub (su tua richiesta) e, se lo usi, Ollama su `127.0.0.1`. Eliminare una trascrizione rimuove **definitivamente** anche l'audio (se non usato da altre). Funziona in qualunque stato: anche se è in elaborazione o con una registrazione live ancora aperta (viene fermata e scartata). La conferma è dentro l'app (niente finestre del browser) e ogni errore è mostrato a schermo; "Seleziona tutto" include anche gli elementi in corso.

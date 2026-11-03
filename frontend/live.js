@@ -5,7 +5,7 @@ const Recorder = {
   state: "idle",            // idle | starting | recording | paused | stopping
   tid: null, ws: null, ctx: null, stream: null, node: null, analyser: null, gain: null,
   samples: 0,               // orologio dell'audio: campioni a 16 kHz catturati (le note usano QUESTO tempo = tempo dell'audio)
-  serverRecv: 0, status: null, segs: [], notes: [], ring: [], cfgLive: null, listeners: new Set(), stopping: false, reconnectTimer: null, down: null, out: [], lastNotif: 0,
+  serverRecv: 0, status: null, segHooks: new Set(), pageId: null, segs: [], notes: [], ring: [], cfgLive: null, listeners: new Set(), stopping: false, reconnectTimer: null, down: null, out: [], lastNotif: 0,
   elapsed() { return this.samples / SR16; },
   emit() { this.listeners.forEach(f => f()); renderActivity(); },
 
@@ -68,7 +68,7 @@ const Recorder = {
       const m = JSON.parse(ev.data);
       if (m.type === "ready") { this.resend(Math.round(m.received_s * SR16)); }
       else if (m.type === "status") { this.status = m; this.serverRecv = Math.round(m.received_s * SR16); }
-      else if (m.type === "segment") { this.segs.push(m.seg); }
+      else if (m.type === "segment") { this.segs.push(m.seg); this.segHooks.forEach(f => { try { f(m.seg); } catch {} }); }
       else if (m.type === "done") { m.aborted ? this.aborted() : this.finished(); }
       this.emit();
     };

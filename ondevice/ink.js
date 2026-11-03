@@ -28,7 +28,7 @@ const ICON = {
   ruler: BODY + '<g transform="rotate(-38 14 40)"><rect x="5" y="16" width="18" height="50" rx="2" fill="url(#ib)" stroke="#aeaeb2" stroke-width=".8"/><path d="M5 22h5M5 28h3M5 34h5M5 40h3M5 46h5M5 52h3M5 58h5" stroke="#8e8e93" stroke-width=".8"/></g>',
 };
 const svg = (k, c) => `<svg viewBox="0 0 28 50" width="30" height="54" style="color:${c}">${ICON[k]}</svg>`;
-const dpr = () => Math.min(window.devicePixelRatio || 1, 2);
+const dpr = () => Math.min(window.devicePixelRatio || 1, 3); // iPad Pro: schermo a piena risoluzione (3x)
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const uid = () => Math.random().toString(36).slice(2, 10);
 function el(tag, attrs, ...kids) { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs || {})) { if (k === "class") e.className = v; else if (k === "html") e.innerHTML = v; else if (k.startsWith("on")) e.addEventListener(k.slice(2), v); else if (v != null && v !== false) e.setAttribute(k, v); } for (const k of kids.flat()) if (k != null && k !== false) e.append(k.nodeType ? k : document.createTextNode(k)); return e; }
@@ -223,8 +223,8 @@ export function createNotebook(host, page, opts = {}) {
   function frame() { raf = 0; if (dirty) { drawBg(); dirty = false; } drawLive(); applyTextCam(); }
   // Il foglio (carta + tratti) è disegnato UNA volta in tessere bitmap; pan e zoom ricompongono solo poche immagini
   // (costo trascurabile): i tratti non vengono ridisegnati a ogni fotogramma, quindi lo scorrimento segue il display (120 Hz).
-  const TILE = 512, SCALES = [0.5, 0.75, 1, 1.5, 2, 3], tiles = new Map(); let tilePx = 0, hidden = null;
-  const MAXPX = 70e6;
+  const TILE = 512, SCALES = [0.5, 0.75, 1, 1.5, 2, 3, 4, 6], tiles = new Map(); let tilePx = 0, hidden = null;
+  const MAXPX = 56e6; // memoria per le tessere (~220 MB al massimo)
   const pickScale = () => { const need = cam.z * dpr(); for (const s of SCALES) if (s >= need - 1e-6) return s; return 0; };
   function invalidateAll() { tiles.clear(); tilePx = 0; }
   function renderTile(ts, i, j) {
@@ -574,7 +574,7 @@ export function createNotebook(host, page, opts = {}) {
 
   // ----- esporta -----
   function exportPNG() {
-    const s = Math.min(2, Math.sqrt(16e6 / (page.w * page.h))), c = document.createElement("canvas"); c.width = Math.round(page.w * s); c.height = Math.round(page.h * s);
+    let s = Math.min(4, Math.max(2, 2048 / page.w)); while (page.w * s * page.h * s > 60e6 && s > 1) s -= 0.5; const c = document.createElement("canvas"); c.width = Math.round(page.w * s); c.height = Math.round(page.h * s);
     const x = c.getContext("2d"); x.scale(s, s); drawPaper(x, page, 0, 0, page.w, page.h, 1); for (const st2 of page.strokes) drawStroke(x, st2);
     for (const t of page.texts) { x.fillStyle = t.color; x.font = `${t.size}px -apple-system,system-ui,sans-serif`; (t.text || "").split("\n").forEach((l, i) => x.fillText(l, t.x, t.y + t.size * (1 + i * 1.3))); }
     c.toBlob(async b => { const f = new File([b], (page.title || "appunti") + ".png", { type: "image/png" }); try { if (navigator.canShare && navigator.canShare({ files: [f] })) return await navigator.share({ files: [f] }); } catch {} const a = el("a", { href: URL.createObjectURL(b), download: f.name }); document.body.append(a); a.click(); a.remove(); }, "image/png");

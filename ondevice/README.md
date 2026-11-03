@@ -37,6 +37,9 @@ Il foglio è disegnato in tessere bitmap: scorrere e zoomare ricompone poche imm
 - **Doppio tocco e pulsante della Apple Pencil**: Safari non li riceve. Servirebbe un'app nativa (Xcode, su Mac).
 - **Trascrizione sul dispositivo**: le frasi arrivano fino a 25 s, con più contesto per Whisper. Il taglio avviene a fine frase (2,5 s di silenzio) o dopo una pausa dopo 6 s.
 
+## Nitidezza (2K e oltre)
+Il foglio è disegnato alla risoluzione del display: fino a 3× (iPad Pro), anche zoomato fino a 6× dove serve, con tessere bitmap. L'esportazione PNG è almeno 2048 px di larghezza.
+
 ## Limiti
 - Modelli più piccoli di quelli del server: qualità più bassa, soprattutto in italiano. Niente riconoscimento dei parlanti né correzione AI.
 - Se il «Ritardo trascrizione» cresce, il modello è troppo lento per quell'iPad: scegline uno più piccolo.

@@ -2,7 +2,7 @@
 
 App web installabile: la trascrizione (Whisper) gira **dentro Safari sull'iPad**. Nessun server, nessun account, nessun dato inviato: audio e testi restano nell'archivio del browser di quell'iPad. Ogni amico che apre il link ha il **proprio** archivio, separato dal tuo.
 
-**Non provata su Safari/iPad reali**: collaudata solo con un modello finto in Chromium (interfaccia, VAD, salvataggio, elimina; quaderno con mouse e tocchi simulati: `tests/e2e/e2e_ink.mjs`, 38 controlli). Il caricamento del modello vero va verificato sull'iPad.
+**Non provata su Safari/iPad reali**: collaudata solo con un modello finto in Chromium (interfaccia, VAD, salvataggio, elimina; quaderno con mouse e tocchi simulati: `tests/e2e/e2e_ink.mjs`, 44 controlli). Il caricamento del modello vero va verificato sull'iPad.
 
 ## Pubblicazione (una volta sola, GitHub Pages gratuito)
 1. GitHub → repository → **Settings → Pages → Source: GitHub Actions**. (Con l'account gratuito il repository deve essere **pubblico**: il codice è visibile, i dati degli utenti no.)
@@ -39,6 +39,12 @@ Il foglio è disegnato in tessere bitmap: scorrere e zoomare ricompone poche imm
 
 ## Nitidezza (2K e oltre)
 Il foglio è disegnato alla risoluzione del display: fino a 3× (iPad Pro), anche zoomato fino a 6× dove serve, con tessere bitmap. L'esportazione PNG è almeno 2048 px di larghezza.
+
+## Stabilizzazione, fluidità e pulsanti della Pencil (versione aggiornata)
+- **Stabilizzazione del tratto** (filtro One Euro): cursore in *⋯* e nelle opzioni delle penne (0–100%, di base 35%). Leviga il tremore a velocità bassa e resta pronto quando scrivi veloce. Con la stabilizzazione attiva le forme perfette usano il tratto vero.
+- Il tratto in corso si ridisegna solo nella sua area; niente sfocature sopra il foglio; l'anteprima della punta sospesa è grande quanto il tratto; il salvataggio non parte mentre scrivi.
+- **Pulsanti della Pencil**: da Safari impossibili; con l'involucro nativo in `ios/` (Xcode sul Mac, non ancora compilato) doppio tocco = gomma ↔ strumento e stretta (Pencil Pro) = strumenti rapidi. La pagina ascolta l'evento `pencil`.
+- Analisi di Note e Keep e confronto con le funzioni dell'app: `ondevice/ANALISI.md`.
 
 ## Limiti
 - Modelli più piccoli di quelli del server: qualità più bassa, soprattutto in italiano. Niente riconoscimento dei parlanti né correzione AI.

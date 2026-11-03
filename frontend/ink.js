@@ -103,6 +103,19 @@ function inPoly(x, y, poly) { let ins = false; for (let i = 0, j = poly.length -
 
 // ---------- riconoscimento delle forme (tieni ferma la penna a fine tratto) ----------
 function rdp(P, eps) { if (P.length < 3) return P; let dm = 0, k = 0; const [a, b] = [P[0], P[P.length - 1]]; for (let i = 1; i < P.length - 1; i++) { const d = segDist(P[i][0], P[i][1], a[0], a[1], b[0], b[1]); if (d > dm) { dm = d; k = i; } } if (dm > eps) { const l = rdp(P.slice(0, k + 1), eps), r = rdp(P.slice(k), eps); return l.slice(0, -1).concat(r); } return [a, b]; }
+class OneEuro { // https://gery.casiez.net/1euro/ : taglio adattivo = poco ritardo se vai veloce, poco tremore se vai piano
+  constructor(mc, beta) { this.mc = mc; this.beta = beta; this.x = null; this.dx = 0; this.t = 0; }
+  static a(cut, dt) { const tau = 1 / (2 * Math.PI * cut); return 1 / (1 + tau / dt); }
+  f(v, t) {
+    if (this.x === null) { this.x = v; this.t = t; return v; }
+    const dt = Math.max(1e-3, (t - this.t) / 1000); this.t = t;
+    this.dx += OneEuro.a(1, dt) * ((v - this.x) / dt - this.dx);
+    this.x += OneEuro.a(this.mc + this.beta * Math.abs(this.dx), dt) * (v - this.x); return this.x;
+  }
+}
+export { OneEuro };
+export const stabParamsOf = s => ({ mc: 0.7 + 14 * (1 - s) ** 2, beta: 0.004 + 0.05 * (1 - s) });
+const stabParams = s => ({ mc: 0.7 + 14 * (1 - s) ** 2, beta: 0.004 + 0.05 * (1 - s) });
 const plenFlat = a => { let s = 0; for (let i = 3; i < a.length; i += 3) s += Math.hypot(a[i] - a[i - 3], a[i + 1] - a[i - 2]); return s; };
 const plen = P => { let s = 0; for (let i = 1; i < P.length; i++) s += Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]); return s; };
 const flat = (P, p = 0.6) => P.flatMap(q => [q[0], q[1], p]);
@@ -180,10 +193,10 @@ function drawPaper(ctx, page, vx0, vy0, vx1, vy1, z) {
 // ---------- il quaderno ----------
 export function createNotebook(host, page, opts = {}) {
   page.strokes ||= []; page.texts ||= []; page.paper ||= { type: "lines", gap: 32, color: "#ffffff" }; page.w ||= 820; page.h ||= 1160;
-  const st = { shapes: localStorage.getItem("ink_shapes") !== "0", tool: localStorage.getItem("ink_tool") || "pen", prev: "eraser", colors: {}, sizes: {}, eraserMode: localStorage.getItem("ink_er") || "object", fingerDraw: localStorage.getItem("ink_finger") === "1", ruler: null };
+  const st = { stab: +(localStorage.getItem("ink_stab") ?? 35), shapes: localStorage.getItem("ink_shapes") !== "0", tool: localStorage.getItem("ink_tool") || "pen", prev: "eraser", colors: {}, sizes: {}, eraserMode: localStorage.getItem("ink_er") || "object", fingerDraw: localStorage.getItem("ink_finger") === "1", ruler: null };
   try { Object.assign(st.colors, JSON.parse(localStorage.getItem("ink_colors") || "{}")); Object.assign(st.sizes, JSON.parse(localStorage.getItem("ink_sizes") || "{}")); } catch {}
   const colorOf = t => st.colors[t] || (t === "marker" ? HL_COLORS[0] : COLORS[0]), sizeOf = t => st.sizes[t] || TOOLS[t][1];
-  const persist = () => { try { localStorage.setItem("ink_tool", st.tool); localStorage.setItem("ink_colors", JSON.stringify(st.colors)); localStorage.setItem("ink_sizes", JSON.stringify(st.sizes)); localStorage.setItem("ink_er", st.eraserMode); localStorage.setItem("ink_finger", st.fingerDraw ? "1" : "0"); localStorage.setItem("ink_shapes", st.shapes ? "1" : "0"); } catch {} };
+  const persist = () => { try { localStorage.setItem("ink_tool", st.tool); localStorage.setItem("ink_colors", JSON.stringify(st.colors)); localStorage.setItem("ink_sizes", JSON.stringify(st.sizes)); localStorage.setItem("ink_er", st.eraserMode); localStorage.setItem("ink_finger", st.fingerDraw ? "1" : "0"); localStorage.setItem("ink_shapes", st.shapes ? "1" : "0"); localStorage.setItem("ink_stab", String(st.stab)); } catch {} };
 
   const root = el("div", { class: "ink" });
   const stage = el("div", { class: "ink-stage" });
@@ -203,7 +216,8 @@ export function createNotebook(host, page, opts = {}) {
   const pushUndo = () => { undoS.push(snap()); if (undoS.length > 80) undoS.shift(); redoS.length = 0; updUndo(); };
   const undo = () => { if (!undoS.length) return; redoS.push(snap()); restore(undoS.pop()); updUndo(); say("Annullato"); };
   const redo = () => { if (!redoS.length) return; undoS.push(snap()); restore(redoS.pop()); updUndo(); say("Ripristinato"); };
-  let saveT = 0; const changed = (inval = true) => { if (inval) invalidateAll(); dirty = true; schedule(); page.updated = Date.now(); clearTimeout(saveT); saveT = setTimeout(() => opts.onChange && opts.onChange(page), 600); };
+  let saveT = 0; const changed = (inval = true) => { if (inval) invalidateAll(); dirty = true; schedule(); page.updated = Date.now(); clearTimeout(saveT); saveT = setTimeout(flushSave, 1500); };
+  const flushSave = () => { if (penDown || gesture) { saveT = setTimeout(flushSave, 800); return; } opts.onChange && opts.onChange(page); };   // niente lavoro pesante mentre scrivi
   const say = (m) => { toast.textContent = m; toast.classList.add("show"); clearTimeout(say.t); say.t = setTimeout(() => toast.classList.remove("show"), 1200); };
 
   // ----- camera -----
@@ -267,8 +281,24 @@ export function createNotebook(host, page, opts = {}) {
     }
     if (more) { dirty = true; schedule(); }
   }
+  let lastLive = null;   // ultima area ridisegnata (px del canvas) o "full"
+  function liveRect(d, full) { // area occupata dal contenuto del livello veloce: solo tratto in corso + puntatore sospeso
+    if (full) return "full";
+    let a = 1e9, b = 1e9, c = -1e9, e = -1e9;
+    const add = (x0, y0, x1, y1) => { a = Math.min(a, x0); b = Math.min(b, y0); c = Math.max(c, x1); e = Math.max(e, y1); };
+    if (cur && cur.pts.length) { const [x0, y0, x1, y1] = bbox(curPred.length ? cur.pts.concat(curPred) : cur.pts), m = cur.s * 3 + 10; add((x0 - m) * cam.z + cam.tx, (y0 - m) * cam.z + cam.ty, (x1 + m) * cam.z + cam.tx, (y1 + m) * cam.z + cam.ty); }
+    if (hoverAt && !penDown) { const r = Math.max(40, eraserR() * cam.z + 8); add(hoverAt[0] - r, hoverAt[1] - r, hoverAt[0] + r, hoverAt[1] + r); }
+    if (a > c) return null;
+    const x = Math.max(0, Math.floor(a * d)), y = Math.max(0, Math.floor(b * d)); return { x, y, w: Math.min(live.width, Math.ceil(c * d)) - x, h: Math.min(live.height, Math.ceil(e * d)) - y };
+  }
   function drawLive() {
-    const d = dpr(); lctx.setTransform(1, 0, 0, 1, 0, 0); lctx.clearRect(0, 0, live.width, live.height);
+    const d = dpr(), full = !!(sel || lasso || eraserAt || st.ruler || drag), now = liveRect(d, full);
+    lctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (full || now === "full" || lastLive === "full") lctx.clearRect(0, 0, live.width, live.height);
+    else {
+      const r = [lastLive, now].filter(Boolean); if (r.length) { const x0 = Math.min(...r.map(q => q.x)), y0 = Math.min(...r.map(q => q.y)), x1 = Math.max(...r.map(q => q.x + q.w)), y1 = Math.max(...r.map(q => q.y + q.h)); lctx.clearRect(x0, y0, x1 - x0, y1 - y0); }
+    }
+    lastLive = now;
     lctx.setTransform(d * cam.z, 0, 0, d * cam.z, d * cam.tx, d * cam.ty);
     if (cur && cur.pts.length) drawStroke(lctx, curPred.length ? { ...cur, pts: cur.pts.concat(curPred) } : cur);
     if (sel) {
@@ -283,15 +313,13 @@ export function createNotebook(host, page, opts = {}) {
     if (hoverAt && !penDown) drawHover(d);
   }
 
-  function drawHover(d) { // Pencil sospesa sopra lo schermo: ombra della punta con colore e spessore reali
+  function drawHover(d) { // Pencil sospesa: anteprima della punta con colore e spessore REALI (come Note), senza ombre
     const [sx, sy, kind] = hoverAt, t = st.tool; lctx.setTransform(d, 0, 0, d, 0, 0); lctx.save();
-    if (t === "eraser") { const r = eraserR() * cam.z; lctx.fillStyle = "rgba(255,255,255,.55)"; lctx.strokeStyle = "rgba(0,0,0,.28)"; lctx.lineWidth = 1; lctx.beginPath(); lctx.arc(sx, sy, r, 0, 7); lctx.fill(); lctx.stroke(); }
+    if (t === "eraser") { const r = eraserR() * cam.z; lctx.fillStyle = "rgba(255,255,255,.4)"; lctx.strokeStyle = "rgba(0,0,0,.35)"; lctx.lineWidth = 1; lctx.beginPath(); lctx.arc(sx, sy, r, 0, 7); lctx.fill(); lctx.stroke(); }
     else if (["pen", "fountain", "pencil", "marker"].includes(t)) {
-      const c = colorOf(t), w = t === "marker" ? sizeOf(t) * 2.6 * cam.z : Math.max(2.5, sizeOf(t) * cam.z * 0.9);
-      lctx.shadowColor = "rgba(0,0,0,.25)"; lctx.shadowBlur = 6; lctx.shadowOffsetY = 1.5;
-      lctx.globalAlpha = t === "marker" ? 0.5 : 0.8; lctx.fillStyle = c;
-      if (t === "marker") { lctx.translate(sx, sy); lctx.rotate(-0.35); lctx.fillRect(-w * 0.18, -w / 2, w * 0.36, w); }
-      else { lctx.beginPath(); lctx.arc(sx, sy, w / 2, 0, 7); lctx.fill(); }
+      const c = colorOf(t);
+      if (t === "marker") { const w = sizeOf(t) * 2.6 * cam.z; lctx.globalAlpha = 0.4; lctx.fillStyle = c; lctx.fillRect(sx - w * 0.2, sy - w / 2, w * 0.4, w); }
+      else { const w = Math.max(2.5, sizeOf(t) * 0.82 * cam.z); lctx.globalAlpha = 0.85; lctx.fillStyle = c; lctx.beginPath(); lctx.arc(sx, sy, w / 2, 0, 7); lctx.fill(); lctx.globalAlpha = 0.35; lctx.strokeStyle = "#000"; lctx.lineWidth = 0.75; lctx.stroke(); }
     } else if (kind === "pen" && t === "text") { lctx.strokeStyle = "#e0a000"; lctx.lineWidth = 2; lctx.beginPath(); lctx.moveTo(sx, sy - 11); lctx.lineTo(sx, sy + 11); lctx.stroke(); }
     lctx.restore();
   }
@@ -413,7 +441,9 @@ export function createNotebook(host, page, opts = {}) {
       if (t === "eraser") { pushUndo(); erasing = true; eraserAt = [x, y]; eraseAt(x, y); schedule(); return; }
       rulerSide = 0;
       if (st.ruler) { const [, ly] = rulerLocal(sx, sy); if (Math.abs(Math.abs(ly) - RW / 2) < 34) rulerSide = Math.sign(ly) || 1; }
-      cur = makeStroke(t, colorOf(t), sizeOf(t), []); cur.pts = []; addPt(sx, sy, p);
+      cur = makeStroke(t, colorOf(t), sizeOf(t), []); cur.pts = [];
+      if (st.stab >= 2) { const q = stabParams(st.stab / 100); cur.fx = new OneEuro(q.mc, q.beta); cur.fy = new OneEuro(q.mc, q.beta); }
+      addPt(sx, sy, p, e.timeStamp);
       return;
     }
     if (e.pointerType === "touch") {
@@ -422,7 +452,8 @@ export function createNotebook(host, page, opts = {}) {
       if (!gesture || touches.size > gesture.max) startGesture(sx, sy);
     }
   }, { passive: false });
-  function addPt(sx, sy, p) {
+  function addPt(sx, sy, p, ts) {
+    if (cur.fx && !rulerSide) { cur.raw = [sx, sy, p]; const [qx, qy] = toPage(sx, sy); (cur.rawpts ||= []).push(qx, qy, p); ts = ts || performance.now(); sx = cur.fx.f(sx, ts); sy = cur.fy.f(sy, ts); }   // rawpts: tratto vero, per riconoscere le forme
     if (rulerSide) { const [lx] = rulerLocal(sx, sy); [sx, sy] = rulerWorld(lx, rulerSide * (RW / 2 + sizeOf(cur.t) / 2)); }
     const [x, y] = toPage(sx, sy); const n = cur.pts.length;
     if (n && Math.hypot(cur.pts[n - 3] - x, cur.pts[n - 2] - y) < 0.6 / cam.z) return;
@@ -444,10 +475,10 @@ export function createNotebook(host, page, opts = {}) {
       if (erasing) { for (const ev of list) { const [ax, ay] = local(ev); const [x, y] = toPage(ax, ay); eraserAt = [x, y]; eraseAt(x, y); } schedule(); return; }
       if (cur && cur.shape && Math.hypot(sx - cur.snapAt[0], sy - cur.snapAt[1]) > 14) { cur.pts = cur.orig; delete cur.shape; delete cur.orig; pathCache.delete(cur); say("Forma annullata"); }
       if (cur && !cur.shape) {
-        for (const ev of list) { const [ax, ay] = local(ev); addPt(ax, ay, penValue(ev, cur.t)); }
-        curPred = []; if (e.pointerType === "pen" && e.getPredictedEvents && cur.t !== "marker") { for (const pe of e.getPredictedEvents().slice(0, 3)) { const [ax, ay] = local(pe); const [px, py] = toPage(ax, ay); curPred.push(px, py, penValue(pe, cur.t)); } }
+        for (const ev of list) { const [ax, ay] = local(ev); addPt(ax, ay, penValue(ev, cur.t), ev.timeStamp); }
+        curPred = []; if (e.pointerType === "pen" && e.getPredictedEvents && cur.t !== "marker" && !cur.fx) { for (const pe of e.getPredictedEvents().slice(0, 3)) { const [ax, ay] = local(pe); const [px, py] = toPage(ax, ay); curPred.push(px, py, penValue(pe, cur.t)); } }
         clearTimeout(holdT); lastMove = performance.now();
-        holdT = setTimeout(() => { if (cur && penDown && moved && st.shapes && !cur.shape && cur.pts.length >= 24 && plenFlat(cur.pts) > 90) { const r = recognize(cur.pts); if (r) { cur.orig = cur.pts; cur.pts = r.pts; cur.shape = r.kind; cur.snapAt = [sx, sy]; cur.bb = bbox(cur.pts); pathCache.delete(cur); say("Forma: " + r.kind); schedule(); } } }, 750);
+        holdT = setTimeout(() => { if (cur && penDown && moved && st.shapes && !cur.shape && cur.pts.length >= 24 && plenFlat(cur.pts) > 90) { const r = recognize(cur.rawpts && cur.rawpts.length >= 12 ? cur.rawpts : cur.pts); if (r) { cur.orig = cur.pts; cur.pts = r.pts; cur.shape = r.kind; cur.snapAt = [sx, sy]; cur.bb = bbox(cur.pts); pathCache.delete(cur); say("Forma: " + r.kind); schedule(); } } }, 750);
         schedule();
       }
       return;
@@ -462,6 +493,7 @@ export function createNotebook(host, page, opts = {}) {
       if (lasso) { finishLasso(); schedule(); return; }
       if (erasing) { erasing = false; eraserAt = null; schedule(); return; }
       if (cur && cur.pts.length) {
+        if (cur.fx && cur.raw && !cur.shape) { const [rx, ry, rp] = cur.raw; const [qx, qy] = toPage(rx, ry); cur.pts.push(qx, qy, rp); }
         pushUndo(); cur.bb = bbox(cur.pts); const s = cur; cur = null; curPred = []; page.strokes.push(s); const grew = s.bb[3] > page.h - 160, oldW = page.w;
         if (grew) page.h += 800; // il foglio si allunga da solo
         if (s.bb[2] > page.w - 40 && opts.autoWiden !== false && (page.paper.size === "inf")) page.w += 400;
@@ -549,8 +581,12 @@ export function createNotebook(host, page, opts = {}) {
       el("div", { class: "mut" }, `Dimensione: ${Math.round(page.w)} × ${Math.round(page.h)}`),
       el("div", { class: "row" }, el("button", { onclick: () => { pushUndo(); page.w += 400; changed(); paperMenu(); } }, "Allarga →"), el("button", { onclick: () => { pushUndo(); page.h += 800; changed(); paperMenu(); } }, "Allunga ↓"), el("button", { onclick: () => { fit(); clampCam(); dirty = true; schedule(); } }, "Adatta")));
   }
+  function stabRow() {
+    const v = el("span", null, st.stab + "%"), r = el("input", { type: "range", min: 0, max: 100, step: 5, value: st.stab, "aria-label": "Stabilizzazione del tratto", oninput: e => { st.stab = +e.target.value; v.textContent = st.stab + "%"; persist(); } });
+    return el("div", null, el("div", { class: "mut" }, "Stabilizzazione del tratto: leviga il tremore (0 = nessuna)"), el("div", { class: "row" }, r, v));
+  }
   function moreMenu() {
-    popup(moreB, el("label", { class: "row" }, el("input", { type: "checkbox", ...(st.shapes ? { checked: "" } : {}), onchange: e => { st.shapes = e.target.checked; persist(); } }), " Forme perfette (tieni ferma la penna a fine tratto)"), el("label", { class: "row" }, el("input", { type: "checkbox", ...(st.fingerDraw ? { checked: "" } : {}), onchange: e => { st.fingerDraw = e.target.checked; persist(); } }), " Scrivi anche col dito (senza Apple Pencil)"),
+    popup(moreB, stabRow(), el("label", { class: "row" }, el("input", { type: "checkbox", ...(st.shapes ? { checked: "" } : {}), onchange: e => { st.shapes = e.target.checked; persist(); } }), " Forme perfette (tieni ferma la penna a fine tratto)"), el("label", { class: "row" }, el("input", { type: "checkbox", ...(st.fingerDraw ? { checked: "" } : {}), onchange: e => { st.fingerDraw = e.target.checked; persist(); } }), " Scrivi anche col dito (senza Apple Pencil)"),
       el("div", { class: "mut" }, "Pencil: scrive · dito: scorre, pizzica per lo zoom · 2 dita tocco: annulla · 3 dita: ripristina · penna ferma all'inizio: strumenti rapidi · penna ferma a fine tratto: forma perfetta"),
       el("button", { onclick: () => { closePop(); exportPNG(); } }, "Esporta immagine (PNG)"),
       el("button", { class: "danger", onclick: () => { pushUndo(); page.strokes = []; page.texts = []; renderTexts(); changed(); closePop(); } }, "Svuota pagina"));
@@ -567,7 +603,7 @@ export function createNotebook(host, page, opts = {}) {
   function toolPop(anchor, k) {
     const range = el("input", { type: "range", min: k === "eraser" ? 4 : 0.5, max: k === "eraser" ? 60 : k === "marker" ? 20 : 14, step: 0.5, value: sizeOf(k), oninput: e => { st.sizes[k] = +e.target.value; persist(); val.textContent = e.target.value; }, onchange: () => buildBar() });
     const val = el("span", null, String(sizeOf(k)));
-    popup(anchor, el("b", null, TOOLS[k][0]), k !== "lasso" && k !== "text" && el("div", { class: "row" }, "Spessore ", range, val),
+    popup(anchor, el("b", null, TOOLS[k][0]), k !== "lasso" && k !== "text" && el("div", { class: "row" }, "Spessore ", range, val), ["pen", "fountain", "pencil", "marker"].includes(k) && stabRow(),
       k === "eraser" && el("div", { class: "iseg" }, ...[["object", "Gomma a oggetto"], ["pixel", "Gomma a pixel"]].map(([m, n]) => el("button", { class: st.eraserMode === m ? "on" : "", onclick: () => { st.eraserMode = m; persist(); toolPop(anchor, k); } }, n))),
       k === "text" && el("div", { class: "mut" }, "Tocca il foglio per scrivere con la tastiera."), k === "lasso" && el("div", { class: "mut" }, "Cerchia tratti o testi, poi trascinali."));
   }
@@ -602,16 +638,26 @@ export function createNotebook(host, page, opts = {}) {
   }
   function addTranscriptMeta(text) { const [t, d] = transcriptBox(); if (!d) return; d.append(el("div", { class: "meta anim", contenteditable: "false" }, text)); t.html = sanitize(d.innerHTML); t.text = d.innerText; changed(); growFor(d); }
 
+  const onPencil = ev => { // inviato dall'involucro nativo (ios/): doppio tocco = come il tasto ⇄; stretta (Pencil Pro) = strumenti rapidi
+    const d = ev.detail || {};
+    if (d.type === "doubleTap" || d.type === "tap") swapTool();
+    else if (d.type === "squeeze") { const r = stage.getBoundingClientRect(); const [x, y] = hoverAt ? [hoverAt[0], hoverAt[1]] : d.x != null ? [d.x - r.left, d.y - r.top] : [W / 2, H / 2]; showQuick(x, y); }
+    else if (d.type === "undo") undo();
+  };
+  window.addEventListener("pencil", onPencil);
+  const onHide = () => { if (document.visibilityState === "hidden") { clearTimeout(saveT); opts.onChange && opts.onChange(page); } };   // app in secondo piano / chiusa: salva subito
+  document.addEventListener("visibilitychange", onHide); window.addEventListener("pagehide", onHide);
+
   return {
     addTranscript, addTranscriptMeta,
     el: root, undo, redo, setTool, swapTool, exportPNG, get page() { return page; }, get state() { return st; }, cam: () => ({ ...cam }),
-    destroy() { ro.disconnect(); cancelAnimationFrame(raf); cancelAnimationFrame(momentum); clearTimeout(saveT); opts.onChange && opts.onChange(page); root.remove(); },
+    destroy() { window.removeEventListener("pencil", onPencil); document.removeEventListener("visibilitychange", onHide); window.removeEventListener("pagehide", onHide); ro.disconnect(); cancelAnimationFrame(raf); cancelAnimationFrame(momentum); clearTimeout(saveT); opts.onChange && opts.onChange(page); root.remove(); },
   };
 }
 
 export const INK_CSS = `
 .ink{--tint:#d9a100;display:flex;flex-direction:column;height:100%;min-height:0;background:#ececf0;position:relative;font-family:-apple-system,"SF Pro Text",system-ui,sans-serif;color:#1c1c1e;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
-.ink-top{display:flex;align-items:center;gap:2px;padding:4px 8px;background:rgba(249,249,249,.86);backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px);border-bottom:.5px solid rgba(0,0,0,.18);z-index:3}
+.ink-top{display:flex;align-items:center;gap:2px;padding:4px 8px;background:rgba(249,249,249,.97);border-bottom:.5px solid rgba(0,0,0,.18);z-index:3}
 .ink-top .grow{flex:1}
 .ink .ib{min-width:44px;min-height:44px;border:0;background:transparent;color:var(--tint);font-size:23px;border-radius:10px;margin:0;padding:0 8px;transition:background .15s,transform .1s}
 .ink .ib:disabled{color:#c7c7cc}.ink .ib:active{background:rgba(0,0,0,.06);transform:scale(.94)}
@@ -627,10 +673,10 @@ export const INK_CSS = `
 .ink-text .spoken{margin:0 0 .3em}
 .ink-text .meta.anim{animation:metaIn .5s ease-out both}
 .ink-text .w{display:inline-block;opacity:0;animation:wIn .5s cubic-bezier(.2,.7,.2,1) forwards}
-@keyframes wIn{from{opacity:0;transform:translateY(.35em);filter:blur(5px)}60%{opacity:1}to{opacity:1;transform:none;filter:none}}
+@keyframes wIn{from{opacity:0;transform:translateY(.35em)}to{opacity:1;transform:none}}
 @keyframes metaIn{from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:none}}
 @media (prefers-reduced-motion:reduce){.ink-text .w,.ink-text .meta.anim{animation:none;opacity:1}}
-.ink-bar{position:absolute;left:50%;bottom:calc(14px + env(safe-area-inset-bottom));transform:translateX(-50%);max-width:calc(100% - 24px);display:flex;gap:6px;align-items:flex-end;overflow-x:auto;overflow-y:hidden;padding:0 14px;height:80px;background:rgba(250,250,252,.88);backdrop-filter:saturate(180%) blur(24px);-webkit-backdrop-filter:saturate(180%) blur(24px);border-radius:24px;box-shadow:0 0 0 .5px rgba(0,0,0,.12),0 10px 34px rgba(0,0,0,.18);z-index:4;scrollbar-width:none}
+.ink-bar{position:absolute;left:50%;bottom:calc(14px + env(safe-area-inset-bottom));transform:translateX(-50%);max-width:calc(100% - 24px);display:flex;gap:6px;align-items:flex-end;overflow-x:auto;overflow-y:hidden;padding:0 14px;height:80px;background:rgba(250,250,252,.97);border-radius:24px;box-shadow:0 0 0 .5px rgba(0,0,0,.12),0 10px 34px rgba(0,0,0,.18);z-index:4;scrollbar-width:none}
 .ink-bar::-webkit-scrollbar{display:none}
 .ink-bar .grp{display:flex;align-items:center;gap:1px;flex-shrink:0;height:80px}
 .ink-bar .grp.itools{align-items:flex-end;overflow:hidden}
@@ -644,20 +690,20 @@ export const INK_CSS = `
 .ink .wheel-in{position:absolute;inset:0;opacity:0;width:100%;height:100%;margin:0;padding:0;border:0}
 .ink .sz{width:30px;height:40px;min-height:40px;border:0;background:transparent;display:flex;align-items:center;justify-content:center;padding:0;margin:0;border-radius:9px}
 .ink .sz i{display:block;border-radius:50%;background:#3a3a3c}.ink .sz.on{background:rgba(120,120,128,.16)}
-.ink-pop{position:absolute;z-index:6;width:280px;background:rgba(255,255,255,.94);backdrop-filter:saturate(180%) blur(24px);-webkit-backdrop-filter:saturate(180%) blur(24px);border-radius:14px;box-shadow:0 0 0 .5px rgba(0,0,0,.1),0 12px 40px rgba(0,0,0,.22);padding:12px;display:flex;flex-direction:column;gap:8px;animation:inkPop .2s cubic-bezier(.3,.8,.3,1.15);transform-origin:50% 100%}
+.ink-pop{position:absolute;z-index:6;width:280px;background:rgba(255,255,255,.98);border-radius:14px;box-shadow:0 0 0 .5px rgba(0,0,0,.1),0 12px 40px rgba(0,0,0,.22);padding:12px;display:flex;flex-direction:column;gap:8px;animation:inkPop .2s cubic-bezier(.3,.8,.3,1.15);transform-origin:50% 100%}
 .ink-pop button{min-height:40px;border-radius:9px;border:0;background:rgba(118,118,128,.12);color:#1c1c1e;font:inherit;font-size:15px;margin:0;padding:6px 10px}
 .ink-pop button.danger{background:rgba(255,59,48,.12);color:#d70015}.ink-pop .mut{color:#8e8e93;font-size:13px}
 .ink-pop .iseg{display:flex;background:rgba(118,118,128,.12);border-radius:9px;padding:2px;gap:2px}.ink-pop .iseg button{flex:1;background:transparent;font-size:13px;padding:4px;min-height:32px}
 .ink-pop .iseg button.on{background:#fff;box-shadow:0 3px 8px rgba(0,0,0,.12),0 0 0 .5px rgba(0,0,0,.04)}
 .ink-pop .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.ink-pop input[type=range]{flex:1;accent-color:var(--tint)}
-.ink-quick{position:absolute;z-index:7;background:rgba(250,250,252,.92);backdrop-filter:saturate(180%) blur(24px);-webkit-backdrop-filter:saturate(180%) blur(24px);border-radius:22px;box-shadow:0 0 0 .5px rgba(0,0,0,.1),0 14px 40px rgba(0,0,0,.25);padding:6px 10px 8px;display:flex;flex-direction:column;gap:6px;animation:inkPop .22s cubic-bezier(.3,.8,.3,1.3)}
+.ink-quick{position:absolute;z-index:7;background:rgba(250,250,252,.98);border-radius:22px;box-shadow:0 0 0 .5px rgba(0,0,0,.1),0 14px 40px rgba(0,0,0,.25);padding:6px 10px 8px;display:flex;flex-direction:column;gap:6px;animation:inkPop .22s cubic-bezier(.3,.8,.3,1.3)}
 .ink-quick .row{display:flex;gap:2px;align-items:flex-end;justify-content:center}
 .ink-quick .qt{border:0;background:transparent;padding:0 3px;border-radius:10px;height:56px;overflow:hidden;margin:0;display:flex;align-items:flex-start}.ink-quick .qt svg{transform:translateY(8px);transition:transform .2s}.ink-quick .qt.on svg{transform:translateY(0)}
-.ink-selmenu{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:5;display:flex;gap:2px;align-items:center;background:rgba(30,30,30,.92);backdrop-filter:blur(20px);border-radius:10px;padding:3px 5px;box-shadow:0 8px 24px rgba(0,0,0,.3)}
+.ink-selmenu{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:5;display:flex;gap:2px;align-items:center;background:rgba(30,30,30,.96);border-radius:10px;padding:3px 5px;box-shadow:0 8px 24px rgba(0,0,0,.3)}
 .ink-selmenu button{background:transparent;color:#fff;border:0;min-height:36px;font:inherit;font-size:15px;padding:0 10px;margin:0;border-radius:7px}
 .ink-selmenu button:active{background:rgba(255,255,255,.15)}
 .ink-selmenu .idot{width:20px;height:20px;min-height:20px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.4)}
-.ink-toast{position:absolute;top:14px;left:50%;transform:translate(-50%,-10px);background:rgba(28,28,30,.82);backdrop-filter:blur(10px);color:#fff;padding:6px 14px;border-radius:20px;font-size:14px;opacity:0;transition:.25s;pointer-events:none;z-index:6}
+.ink-toast{position:absolute;top:14px;left:50%;transform:translate(-50%,-10px);background:rgba(28,28,30,.9);color:#fff;padding:6px 14px;border-radius:20px;font-size:14px;opacity:0;transition:.25s;pointer-events:none;z-index:6}
 .ink-toast.show{opacity:1;transform:translate(-50%,0)}
 @keyframes inkPop{from{opacity:0;transform:scale(.9)}to{opacity:1;transform:none}}
 `;

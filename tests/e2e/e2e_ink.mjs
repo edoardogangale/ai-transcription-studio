@@ -10,7 +10,7 @@ const ctx = await b.newContext({ viewport: { width: 1366, height: 1024 }, hasTou
 await ctx.route("https://cdn.jsdelivr.net/**", r => r.fulfill({ contentType: "text/javascript", body: FAKE }));
 const p = await ctx.newPage(); const errs = []; p.on("pageerror", e => errs.push(e.message)); p.on("dialog", d => { errs.push("dialog " + d.message()); d.dismiss(); });
 const pages = () => p.evaluate(() => new Promise(res => { const r = indexedDB.open("od-studio", 2); r.onsuccess = () => { const q = r.result.transaction("pages").objectStore("pages").getAll(); q.onsuccess = () => res(q.result); }; }));
-const cur = async () => { await p.waitForTimeout(900); const ps = await pages(); return ps.sort((a, b) => b.updated - a.updated)[0]; };
+const cur = async () => { await p.waitForTimeout(1900); const ps = await pages(); return ps.sort((a, b) => b.updated - a.updated)[0]; };
 const box = async () => p.locator(".ink-stage").boundingBox();
 async function draw(pts, hold = 0) { const s = await box(); await p.mouse.move(s.x + pts[0][0], s.y + pts[0][1]); await p.mouse.down(); for (const [x, y] of pts.slice(1)) await p.mouse.move(s.x + x, s.y + y, { steps: 3 }); if (hold) await p.waitForTimeout(hold); await p.mouse.up(); await p.waitForTimeout(60); }
 async function touch(list) { // list di [tipo, id, x, y]
@@ -35,7 +35,7 @@ await touch([["pointerdown", 11, 900, 300]]); await p.waitForTimeout(800); const
 await p.click(".ink-quick [aria-label=Evidenziatore]"); await draw([[180, 210], [400, 230]]); pg = await cur(); ok("evidenziatore dagli strumenti rapidi", pg.strokes.at(-1).t === "marker");
 const nBefore = pg.strokes.length; await p.click("[aria-label='Scambia strumento']"); await draw([[700, 640], [800, 670], [900, 640]]); pg = await cur(); ok("⇄ passa alla gomma e cancella", pg.strokes.length < nBefore, `${nBefore}→${pg.strokes.length}`);
 await p.click("[aria-label='Scambia strumento']"); ok("⇄ torna all'evidenziatore", await p.locator(".itool.on[aria-label=Evidenziatore]").count() === 1);
-await p.click("[aria-label=Penna]"); await p.click("[aria-label=Penna]"); ok("secondo tocco sullo strumento = spessore", await p.locator(".ink-pop input[type=range]").count() === 1); await p.click("[aria-label=Penna]");
+await p.click("[aria-label=Penna]"); await p.click("[aria-label=Penna]"); ok("secondo tocco sullo strumento = spessore", await p.locator(".ink-pop input[type=range]").count() >= 1); await p.click("[aria-label=Penna]");
 await p.click("[aria-label=Stilografica]"); await draw([[200, 850], [260, 820], [320, 880], [380, 830]]); pg = await cur(); ok("stilografica", pg.strokes.at(-1).t === "fountain");
 await p.click("[aria-label=Gomma]"); await p.click("[aria-label=Gomma]"); await p.click("text=Gomma a pixel"); await p.click("[aria-label=Gomma]");
 const nb2 = pg.strokes.length; await draw([[290, 800], [290, 900]]); pg = await cur(); ok("gomma a pixel divide il tratto", pg.strokes.length >= nb2, `${nb2}→${pg.strokes.length}`);
@@ -46,6 +46,34 @@ await draw([[270, 700], [370, 760]]); pg = await cur(); const sq2 = pg.strokes.f
 await p.click(".ink-selmenu >> text=Fine");
 await p.click("[aria-label=Testo]"); const s2 = await box(); await p.mouse.click(s2.x + 650, s2.y + 820); await p.keyboard.type("Bastiglia 1789"); await p.click("[aria-label=Penna]"); pg = await cur(); ok("casella di testo", pg.texts.some(t => t.text === "Bastiglia 1789"), JSON.stringify(pg.texts));
 await p.click("[aria-label=Foglio]"); await p.click(".ink-pop >> text=Quadretti"); await p.click(".ink-pop >> text=Allarga →"); pg = await cur(); ok("carta a quadretti + foglio allargato", pg.paper.type === "grid" && pg.w > 820, `${pg.paper.type} ${pg.w}`);
+// stabilizzazione del tratto: filtro One Euro su una curva con tremore (240 Hz come la Pencil), poi prova di integrazione dal vivo
+{
+  const m = await p.evaluate(async () => {
+    const { OneEuro, stabParamsOf } = await import("/ink.js");
+    let s = 11; const rnd = () => (s = (s * 1664525 + 1013904223) % 4294967296) / 4294967296 - 0.5;
+    const truth = t => 100 + 60 * Math.sin(t / 400), res = {};
+    for (const lvl of [0, 0.35, 0.9]) {
+      const q = stabParamsOf(lvl), f = new OneEuro(q.mc, q.beta); let err = 0, n = 0, out = [], raw = [];
+      s = 11; for (let t = 0; t < 2000; t += 4.17) { const noisy = truth(t) + rnd() * 6, y = lvl ? f.f(noisy, t) : noisy; err += (y - truth(t)) ** 2; n++; out.push(y); }
+      let rg = 0; for (let i = 2; i < out.length; i++) rg += Math.abs(out[i] - 2 * out[i - 1] + out[i - 2]); res[lvl] = { rms: Math.sqrt(err / n), rough: rg / out.length, end: out.at(-1) - truth(1999) };
+    }
+    return res;
+  });
+  ok("filtro: la stabilizzazione riduce il tremore (scabrosità del tratto)", m[0.9].rough < m[0].rough * 0.1 && m[0.35].rough < m[0].rough * 0.6, `0%: ${m[0].rough.toFixed(2)} · 35%: ${m[0.35].rough.toFixed(2)} · 90%: ${m[0.9].rough.toFixed(2)}`);
+  ok("filtro: alla velocità normale il ritardo resta piccolo", Math.abs(m[0.35].end) < 6, `scarto in punta ${m[0.35].end.toFixed(2)} px`);
+  const setStab = async v => { await p.click("[aria-label=Altro]"); await p.waitForSelector(".ink-pop input[aria-label='Stabilizzazione del tratto']"); await p.evaluate(v => { const r = document.querySelector(".ink-pop input[aria-label='Stabilizzazione del tratto']"); r.value = v; r.dispatchEvent(new Event("input", { bubbles: true })); }, v); await p.mouse.move(5, 5); await p.mouse.down(); await p.mouse.up(); };
+  await p.click("[aria-label=Penna]"); await setStab(90);
+  const before = (await cur()).strokes.length; await draw(Array.from({ length: 60 }, (_, i) => [180 + i * 9, 640 + Math.sin(i / 8) * 25 + ((i * 7) % 5) - 2]));
+  const sm = (await cur()).strokes; ok("con stabilizzazione alta il tratto si salva comunque", sm.length === before + 1 && sm.at(-1).pts.length > 90, `${sm.at(-1).pts.length / 3} punti`);
+  await setStab(35);
+}
+// pulsanti della Apple Pencil: arrivano da un'app nativa (ios/) come evento "pencil"
+await p.evaluate(() => window.dispatchEvent(new CustomEvent("pencil", { detail: { type: "doubleTap" } })));
+ok("doppio tocco della Pencil (evento dall'app nativa) → gomma", await p.locator(".itool.on[aria-label=Gomma]").count() === 1);
+await p.evaluate(() => window.dispatchEvent(new CustomEvent("pencil", { detail: { type: "doubleTap" } })));
+ok("secondo doppio tocco → torna allo strumento di prima", await p.locator(".itool.on[aria-label=Gomma]").count() === 0);
+await p.evaluate(() => window.dispatchEvent(new CustomEvent("pencil", { detail: { type: "squeeze" } })));
+ok("stretta della Pencil Pro → strumenti rapidi", await p.locator(".ink-quick").count() === 1); await p.mouse.move(5, 5); await p.mouse.down(); await p.mouse.up();
 await p.click("[aria-label=Righello]"); await p.waitForTimeout(200); ok("righello visibile", await p.locator(".itool.on[aria-label=Righello]").count() === 1);
 await p.click("[aria-label=Matita]");
 await p.evaluate(() => { const st = document.querySelector(".ink-stage"), r = st.getBoundingClientRect(); const ev = (type, x, y, b, alt) => st.dispatchEvent(new PointerEvent(type, { pointerId: 5, pointerType: "pen", isPrimary: true, clientX: r.left + x, clientY: r.top + y, buttons: b, pressure: b ? 0.6 : 0, altitudeAngle: alt, bubbles: true, cancelable: true })); ev("pointermove", 900, 500, 0, 1.5); ev("pointerdown", 900, 500, 1, 0.35); for (let i = 1; i < 30; i++) ev("pointermove", 900 + i * 6, 500 + Math.sin(i / 3) * 30, 1, 0.35); ev("pointerup", 1080, 500, 0, 0.35); ev("pointermove", 700, 300, 0, 1.2); });

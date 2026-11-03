@@ -46,6 +46,9 @@ Il foglio è disegnato alla risoluzione del display: fino a 3× (iPad Pro), anch
 - **Pulsanti della Pencil**: da Safari impossibili; con l'involucro nativo in `ios/` (Xcode sul Mac, non ancora compilato) doppio tocco = gomma ↔ strumento e stretta (Pencil Pro) = strumenti rapidi. La pagina ascolta l'evento `pencil`.
 - Analisi di Note e Keep e confronto con le funzioni dell'app: `ondevice/ANALISI.md`.
 
+## Download del modello (Whisper Large v3 Turbo si bloccava)
+Causa probabile: per Turbo l'app chiedeva il codificatore a precisione piena (molti GB) e Safari restava fermo. Ora Turbo usa la versione q4 (~0,8 GB in tutto). Il download è **a pezzi da 8 MB con ripresa**: se per 25 s non arriva nulla, interrompe e riprova (fino a 8 volte); i pezzi già scaricati restano anche se chiudi l'app; schermo acceso e archivio persistente durante il download. In *Impostazioni* vedi se il modello è già «✓ scaricato». Provato con un finto server (rete che cade, richieste bloccate, niente Range, ripresa): `tests/e2e/e2e_download.mjs` (15 controlli). **Non provato col vero Hugging Face** (da qui non è raggiungibile): se il blocco resta, mandami il messaggio che compare.
+
 ## Limiti
 - Modelli più piccoli di quelli del server: qualità più bassa, soprattutto in italiano. Niente riconoscimento dei parlanti né correzione AI.
 - Se il «Ritardo trascrizione» cresce, il modello è troppo lento per quell'iPad: scegline uno più piccolo.

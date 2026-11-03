@@ -7,6 +7,7 @@ const srv = http.createServer((q, r) => { let p = path.join(root, q.url.split("?
 const FAKE = `export const env={}; let n=0; export async function pipeline(t,m,o){ o.progress_callback({file:'a',loaded:5,total:10}); return async (audio)=>({text:'frase '+(++n)+' di '+Math.round(audio.length/16000)+' secondi'}); }`;
 const b = await chromium.launch({ args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", "--use-file-for-fake-audio-capture=" + wav] });
 const ctx = await b.newContext({ viewport: { width: 1024, height: 1366 }, hasTouch: true, permissions: ["microphone"] });
+await ctx.route("https://huggingface.co/**", r => { const rg = r.request().headers()["range"], body = Buffer.alloc(1000, 1), m = rg && /bytes=(\d+)-(\d+)/.exec(rg), cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Expose-Headers": "Content-Range" }; if (m) { const a = +m[1], b = Math.min(+m[2], 999); return r.fulfill({ status: 206, headers: { ...cors, "Content-Range": `bytes ${a}-${b}/1000` }, body: body.subarray(a, b + 1) }); } r.fulfill({ status: 200, headers: cors, body }); });   // pesi finti (il modello vero non si scarica nei test)
 await ctx.route("https://cdn.jsdelivr.net/**", r => r.fulfill({ contentType: "text/javascript", body: FAKE }));
 const p = await ctx.newPage(); const errs = []; p.on("pageerror", e => errs.push(e.message)); p.on("dialog", d => { errs.push("dialog"); d.dismiss(); });
 await p.goto("http://localhost:8791/"); await p.waitForSelector(".fab.rec");

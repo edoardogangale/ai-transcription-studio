@@ -1,3 +1,4 @@
+import * as DL from "./dl.js";
 import { createNotebook, INK_CSS, PAPERS, SIZES, renderThumb } from "./ink.js";
 // Trascrizione sul dispositivo: tutto gira nel browser (audio, modello, archivio). Nessun server.
 const MODELS = {
@@ -32,21 +33,27 @@ const Engine = {
   msg(m) {
     if (m.type === "progress") this.onProgress && this.onProgress(m.p);
     else if (m.type === "warn") this.onWarn && this.onWarn(m.msg);
+    else if (m.type === "note") this.onNote && this.onNote(m.msg);
     else if (m.type === "ready") { this.ready = true; this.device = m.device; const f = this.waiters.get("load"); f && f.res(m); this.waiters.delete("load"); }
     else if (m.type === "result") { const f = this.waiters.get(m.id); f && f.res(m); this.waiters.delete(m.id); }
     else if (m.type === "error") { const k = this.waiters.has(m.id) ? m.id : "load"; const f = this.waiters.get(k); f && f.rej(new Error(m.msg)); this.waiters.delete(k); }
   },
-  load(model) {
+  async load(model) {
     this.start(); this.ready = false;
     const dev = navigator.gpu ? "webgpu" : "wasm";
-    return this.loading = new Promise((res, rej) => { this.waiters.set("load", { res, rej }); this.w.postMessage({ type: "load", model, device: dev }); });
+    let wake = null; try { wake = await navigator.wakeLock?.request("screen"); } catch {} try { await navigator.storage?.persist?.(); } catch {}
+    try { return await (this.loading = new Promise((res, rej) => { this.waiters.set("load", { res, rej }); this.w.postMessage({ type: "load", model, device: dev }); })); }
+    finally { try { wake && wake.release(); } catch {} }
   },
   run(audio, lang) { const id = ++this.seq; return new Promise((res, rej) => { this.waiters.set(id, { res, rej }); this.w.postMessage({ type: "run", id, audio, lang }, [audio.buffer]); }); },
 };
-function loadUI(box) { // barra di caricamento del modello
-  const bar = h("i"), txt = h("div", { class: "mut" }, "Preparazione del modello…"); box.replaceChildren(h("div", { class: "bar" }, bar), txt);
+function loadUI(box) { // barra di caricamento del modello: dimensione stimata, avvisi sui nuovi tentativi
+  const hint = (MODELS[cfg.get("model", "onnx-community/whisper-small")] || [0, 0])[1] * 1e6;
+  const bar = h("i"), txt = h("div", { class: "mut" }, "Preparazione del modello…"), note = h("div", { class: "mut" });
+  box.replaceChildren(h("div", { class: "bar" }, bar), txt, note, h("div", { class: "mut" }, "Tieni l'app aperta e lo schermo acceso finché il download non finisce. Se la rete cade riprende da solo, e se esci riparte da dove era arrivato."));
   const files = {};
-  Engine.onProgress = p => { if (p.file && p.total) { files[p.file] = [p.loaded || 0, p.total]; let l = 0, t = 0; for (const [a, b] of Object.values(files)) { l += a; t += b; } bar.style.width = (100 * l / t).toFixed(0) + "%"; txt.textContent = `Download del modello (solo la prima volta): ${(l / 1e6).toFixed(0)} / ${(t / 1e6).toFixed(0)} MB`; } };
+  Engine.onProgress = p => { if (p.file && p.total) { files[p.file] = [p.loaded || 0, p.total]; let l = 0, t = 0; for (const [x, y] of Object.values(files)) { l += x; t += y; } t = Math.max(t, hint * 0.9); bar.style.width = Math.min(100, 100 * l / t).toFixed(0) + "%"; txt.textContent = `Download del modello (solo la prima volta): ${(l / 1e6).toFixed(0)} / ${(t / 1e6).toFixed(0)} MB`; } };
+  Engine.onNote = m => { note.textContent = m; };
   Engine.onWarn = m => box.append(h("div", { class: "bad" }, m));
 }
 
@@ -306,6 +313,9 @@ async function pageView(id) {
 
 async function settings() {
   const out = h("div", { class: "group" }), box = h("div"), r = h("div", { class: "mut", style: "padding:8px 12px" });
+  const ms = modelSel(), cached = h("span", { class: "mut" });
+  const refresh = async () => { const m = cfg.get("model", "onnx-community/whisper-small"), ok = await DL.isCached(m, navigator.gpu ? "webgpu" : "wasm"); cached.textContent = ok ? "✓ scaricato" : `non scaricato (~${(MODELS[m] || [0, 0])[1]} MB)`; cached.className = ok ? "ok" : "mut"; };
+  ms.addEventListener("change", refresh); refresh();
   const chk = (ok, t) => h("div", { class: "cell" }, h("span", { class: "chk" }, h("span", { class: "d" + (ok ? "" : " no") }, ok ? "✓" : "✕")), h("div", { class: "grow" }, t));
   out.append(chk(!!navigator.gpu, navigator.gpu ? "GPU (WebGPU): modelli veloci" : "GPU non disponibile: userà la CPU, più lenta"), chk(!!navigator.mediaDevices?.getUserMedia, "Microfono (serve https)"), chk(!!window.MediaRecorder, "Salvataggio dell'audio"), chk(!!navigator.wakeLock, "Schermo acceso durante la registrazione"));
   try { const e = await navigator.storage.estimate(); out.append(h("div", { class: "cell" }, h("div", { class: "grow" }, "Spazio disponibile"), h("span", { class: "mut" }, `~${Math.round((e.quota - e.usage) / 1e9)} GB`))); } catch {}
@@ -313,7 +323,7 @@ async function settings() {
   const test = h("button", { class: "primary", onclick: async e => { e.target.disabled = true; const t = performance.now(); loadUI(box); try { await Engine.load(cfg.get("model", "onnx-community/whisper-small")); r.textContent = `Modello caricato in ${((performance.now() - t) / 1000).toFixed(1)} s su ${Engine.device === "webgpu" ? "GPU" : "CPU"}. La velocità vera si vede in registrazione: se compare «ritardo» che cresce, scegli un modello più piccolo.`; r.className = "ok"; } catch (err) { r.replaceChildren(h("span", { class: "bad" }, "Errore: " + err.message)); } e.target.disabled = false; } }, "Scarica e prova il modello");
   app.append(h("h1", null, "Impostazioni"), h("div", { class: "sub" }, "Il modello si scarica una sola volta e resta sull'iPad."),
     h("h2", null, "Trascrizione"), h("div", { class: "group" },
-      h("div", { class: "cell" }, h("span", { class: "ico", html: ic.cpu }), h("div", { class: "grow" }, "Modello"), modelSel()),
+      h("div", { class: "cell" }, h("span", { class: "ico", html: ic.cpu }), h("div", { class: "grow" }, "Modello", h("div", null, cached)), ms),
       h("div", { class: "cell" }, h("span", { class: "ico", style: "background:#34a853", html: ic.globe }), h("div", { class: "grow" }, "Lingua"), langSel())),
     h("div", { class: "row", style: "margin:12px 0" }, test), box, r,
     h("h2", null, "Questo iPad"), out,

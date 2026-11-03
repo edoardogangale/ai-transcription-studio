@@ -342,6 +342,68 @@ async def upload(file: UploadFile = File(...)):
     return meta
 
 
+# Caricamento a pezzi (4 MB l'uno, con ripresa): regge i tunnel/proxy (es. Codespaces) che interrompono le richieste lunghe.
+@app.post("/api/upload/begin")
+async def upload_begin(request: Request):
+    j = await request.json()
+    uid = db.new_id()
+    d = config.UPLOADS / uid
+    d.mkdir(parents=True)
+    suffix = Path(str(j.get("name") or "audio")).suffix.lower()[:8] or ".bin"
+    (d / "partial.json").write_text(json.dumps({"owner": me(), "name": j.get("name"), "suffix": suffix}))
+    (d / f"original{suffix}").write_bytes(b"")
+    return {"upload_id": uid}
+
+
+def _partial(uid):
+    if not uid.isalnum():
+        err(404, "Upload non trovato.")
+    p = config.UPLOADS / uid / "partial.json"
+    if not p.exists():
+        err(404, "Upload non trovato.")
+    m = json.loads(p.read_text())
+    if (m.get("owner") or auth.ADMIN_ID) != me():
+        err(404, "Upload non trovato.")
+    return m, config.UPLOADS / uid / f"original{m['suffix']}"
+
+
+@app.put("/api/upload/{uid}/chunk")
+async def upload_chunk(uid: str, request: Request, offset: int = 0):
+    _, dst = _partial(uid)
+    size = dst.stat().st_size
+    if offset > size:
+        err(409, f"Pezzo fuori sequenza (il server ha {size} byte).")
+    with open(dst, "r+b") as f:  # un pezzo ripetuto dopo un errore riscrive lo stesso punto: nessun duplicato
+        f.seek(offset)
+        f.truncate(offset)
+        async for part in request.stream():
+            f.write(part)
+    return {"size": dst.stat().st_size}
+
+
+@app.post("/api/upload/{uid}/finish")
+async def upload_finish(uid: str):
+    m, dst = _partial(uid)
+    d = dst.parent
+
+    def _sha():
+        h = hashlib.sha256()
+        with open(dst, "rb") as f:
+            while chunk := f.read(1 << 20):
+                h.update(chunk)
+        return h.hexdigest()
+    sha = await asyncio.to_thread(_sha)
+    try:
+        info = await asyncio.to_thread(audio.probe, dst)
+    except audio.AudioError as e:
+        shutil.rmtree(d, ignore_errors=True)
+        err(400, str(e))
+    meta = {"upload_id": uid, "name": m.get("name"), "size": dst.stat().st_size, "sha": sha, "path": str(dst), "owner": me(), **info}
+    (d / "meta.json").write_text(json.dumps(meta, ensure_ascii=False))
+    (d / "partial.json").unlink(missing_ok=True)
+    return meta
+
+
 def _upload(uid):
     p = config.UPLOADS / uid / "meta.json"
     if not p.exists():

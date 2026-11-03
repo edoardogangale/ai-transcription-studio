@@ -258,25 +258,37 @@ const Uploads = {
     for (const f of files) UP.items.push({ id: Math.random().toString(36).slice(2), file: f, name: f.name, size: f.size, pct: 0, state: "queued", meta: null, queued: false });
     this.pump(); notifyUI();
   },
-  cancel(id) { const u = UP.items.find(x => x.id === id); if (!u) return; if (u.xhr) u.xhr.abort(); UP.items = UP.items.filter(x => x.id !== id); notifyUI(); },
+  cancel(id) { const u = UP.items.find(x => x.id === id); if (!u) return; u.cancelled = true; if (u.xhr) u.xhr.abort(); UP.items = UP.items.filter(x => x.id !== id); notifyUI(); },
   pump() {
     while (this.active < this.MAX) {
       const u = UP.items.find(x => x.state === "queued"); if (!u) break;
       this.active++; u.state = "uploading"; this.send(u);
     }
   },
-  send(u) {
-    const fd = new FormData(); fd.append("file", u.file);
-    const x = new XMLHttpRequest(); u.xhr = x; x.open("POST", "/api/upload"); if (token()) x.setRequestHeader("X-Studio-Token", token());
-    x.upload.onprogress = e => { if (e.lengthComputable) { u.pct = 100 * e.loaded / e.total; notifyUI(); } };
+  async send(u) { // a pezzi da 4 MB, con nuovi tentativi: una rete instabile o un tunnel che taglia le richieste lunghe non rovinano il caricamento
+    const CH = 4 << 20, hdr = token() ? { "X-Studio-Token": token() } : {};
     const end = () => { this.active--; this.pump(); notifyUI(); };
-    x.onload = () => {
-      if (x.status === 200) { u.meta = JSON.parse(x.responseText); u.state = "ready"; u.pct = 100; end(); this.maybeSubmit(u); }
-      else { u.state = "error"; try { u.error = JSON.parse(x.responseText).detail; } catch { u.error = "Caricamento fallito"; } end(); }
-    };
-    x.onerror = () => { u.state = "error"; u.error = "Errore di rete"; end(); };
-    x.onabort = () => { this.active--; this.pump(); };
-    x.send(fd);
+    const chunk = (uid, off) => new Promise((res, rej) => {
+      const x = new XMLHttpRequest(); u.xhr = x; x.open("PUT", `/api/upload/${uid}/chunk?offset=${off}`); for (const k in hdr) x.setRequestHeader(k, hdr[k]);
+      x.upload.onprogress = e => { if (e.lengthComputable) { u.pct = 100 * (off + e.loaded) / u.file.size; notifyUI(); } };
+      x.onload = () => x.status === 200 ? res() : rej(Object.assign(new Error((() => { try { return JSON.parse(x.responseText).detail; } catch { return "Caricamento fallito (" + x.status + ")"; } })()), { fatal: x.status >= 400 && x.status < 500 && x.status !== 408 && x.status !== 429 }));
+      x.onerror = () => rej(new Error("Errore di rete")); x.onabort = () => rej(Object.assign(new Error("annullato"), { fatal: true, aborted: true }));
+      x.send(u.file.slice(off, off + CH));
+    });
+    try {
+      const { upload_id: uid } = await api("/api/upload/begin", { json: { name: u.file.name } });
+      u.uid = uid;
+      for (let off = 0; off < u.file.size || off === 0; off += CH) {
+        if (u.cancelled) { this.active--; this.pump(); return; }
+        for (let k = 0; ; k++) {
+          try { await chunk(uid, off); break; }
+          catch (e) { if (e.aborted) { this.active--; this.pump(); return; } if (e.fatal || k >= 6) throw e; u.note = `Connessione instabile, riprovo (${k + 1}/6)…`; notifyUI(); await new Promise(r => setTimeout(r, 1200 * (k + 1))); u.note = ""; }
+        }
+        if (u.file.size === 0) break;
+      }
+      u.pct = 99; notifyUI();
+      u.meta = await api(`/api/upload/${uid}/finish`, { method: "POST" }); u.state = "ready"; u.pct = 100; end(); this.maybeSubmit(u);
+    } catch (e) { if (e.aborted) return; u.state = "error"; u.error = e.message === "Errore di rete" ? "Errore di rete: il server non risponde (il Codespace è acceso? ricarica la pagina)" : e.message; end(); }
   },
   body(u) { return { upload_id: u.meta.upload_id, language: CFG.lang, context: CFG.context, normalize: CFG.normalize, denoise: CFG.denoise, diarize: CFG.diarize || CFG.teacher_only, teacher_only: CFG.teacher_only, num_speakers: CFG.num_speakers ? +CFG.num_speakers : null, folder_id: CFG.folder }; },
   /* appena un file è caricato, se c'è un modello scelto parte subito la trascrizione (mentre gli altri file si caricano) */

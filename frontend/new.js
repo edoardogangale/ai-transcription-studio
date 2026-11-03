@@ -37,9 +37,9 @@ ROUTES.push([/^#\/new$/, async () => {
 
   const queue = h("div", { class: "list", style: "margin-top:12px" });
   let qStruct = "";
-  const stText = u => ({ queued: "In attesa di caricamento", uploading: `Caricamento ${Math.round(u.pct)}%`, ready: "Pronto: scegli un modello e premi Avvia", done: u.queued ? "In trascrizione ✓" : "Caricato", error: u.error }[u.state]);
+  const stText = u => ({ queued: "In attesa di caricamento", uploading: `Caricamento ${Math.round(u.pct)}%${u.note ? " · " + u.note : ""}`, ready: "Pronto: scegli un modello e premi Avvia", done: u.queued ? "In trascrizione ✓" : "Caricato", error: u.error }[u.state]);
   const drawQueue = () => {
-    const struct = sigOf(UP.items.map(u => [u.id, u.state, !!u.meta, u.queued, u.error, u.tid]));
+    const struct = sigOf(UP.items.map(u => [u.id, u.state, !!u.meta, u.queued, u.error, u.tid, u.note]));
     if (struct === qStruct) {   // stessa struttura: aggiorna solo barra e testo di stato
       UP.items.forEach(u => { const el = queue.querySelector(`[data-uid="${u.id}"]`); if (!el) return; const i = el.querySelector(".bar i"); if (i) i.style.width = u.pct + "%"; const st = el.querySelector(".qstat"); if (st && st.textContent !== stText(u)) st.textContent = stText(u); });
       return;

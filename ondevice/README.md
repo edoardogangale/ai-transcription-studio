@@ -54,6 +54,9 @@ Causa probabile: per Turbo l'app chiedeva il codificatore a precisione piena (mo
 - **Registrazione in secondo piano**: iPadOS ferma il microfono delle pagine web quando l'app non è visibile (vale per Safari e per le app sulla Home). Soluzione pratica: **Split View / Slide Over / Stage Manager** (l'app resta visibile e continua). Se esci comunque, al ritorno l'app riprende e scrive nel foglio «⚠ N s senza audio». Con l'involucro nativo in `ios/` (Background Modes → Audio) dovrebbe continuare anche in secondo piano: non provato.
 - L'anteprima della punta sopra lo schermo è **spenta di base**; si attiva da ⋯.
 
+## Carica un audio
+Due pulsanti: **Scegli audio** (elenco esteso di formati) e **Tutti i file** (nessun filtro: serve se il selettore di iPadOS non mostra il tuo audio). Si possono scegliere **più file insieme** o trascinarli (Split View con l'app File). I file lunghi vengono tagliati nei punti di silenzio (non a metà parola). Se Safari non riesce a leggere il formato (tipico: **.opus di WhatsApp**, .amr, .wma) l'app lo dice e suggerisce di convertirlo in .m4a/.mp3/.wav o di usare l'app server.
+
 ## Limiti
 - Modelli più piccoli di quelli del server: qualità più bassa, soprattutto in italiano. Niente riconoscimento dei parlanti né correzione AI.
 - Se il «Ritardo trascrizione» cresce, il modello è troppo lento per quell'iPad: scegline uno più piccolo.

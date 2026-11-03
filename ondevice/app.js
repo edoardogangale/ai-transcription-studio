@@ -265,24 +265,56 @@ async function rec() {
   window.onbeforeunload = () => stopped ? null : "Registrazione in corso";
 }
 
+const AUDIO_ACCEPT = "audio/*,video/*,.m4a,.mp3,.wav,.aac,.flac,.ogg,.oga,.opus,.caf,.amr,.aif,.aiff,.wma,.mp4,.mov,.m4v,.webm,.3gp,.mpga";
+async function decodeToPcm(file) { // -> Float32 mono 16 kHz. Il contesto a 16 kHz fa ricampionare subito al decodificatore (meno memoria).
+  const buf = await file.arrayBuffer(), AC = window.AudioContext || window.webkitAudioContext;
+  let ac; try { ac = new AC({ sampleRate: 16000 }); } catch { ac = new AC(); }
+  try {
+    const dec = await new Promise((res, rej) => { const p = ac.decodeAudioData(buf, res, rej); if (p && p.then) p.then(res, rej); });
+    const n = dec.numberOfChannels, len = dec.length, mono = new Float32Array(len);
+    for (let c = 0; c < n; c++) { const d = dec.getChannelData(c); for (let i = 0; i < len; i++) mono[i] += d[i] / n; }
+    return downsample(mono, dec.sampleRate);
+  } finally { try { ac.close(); } catch {} }
+}
+function splitSpeech(pcm, maxS = 28, searchS = 4) { // finestre da ~28 s tagliate nel punto più silenzioso (non a metà parola)
+  const SR = 16000, F = 480, out = []; let start = 0;
+  while (start < pcm.length) {
+    let end = Math.min(pcm.length, start + maxS * SR);
+    if (end < pcm.length) { let best = end, bestE = 1e9; for (let s = end - searchS * SR; s < end - F; s += F) { let e = 0; for (let j = 0; j < F; j++) e += pcm[s + j] * pcm[s + j]; if (e < bestE) { bestE = e; best = s + F / 2; } } end = Math.round(best); }
+    out.push([start, end]); start = end;
+  }
+  return out;
+}
 async function importView() {
   const model = cfg.get("model", "onnx-community/whisper-small"), lang = cfg.get("lang", "italian");
-  const box = h("div"), out = h("div", { class: "card big" }), st = h("div", { class: "mut" });
-  const inp = h("input", { type: "file", accept: "audio/*,video/*", style: "display:none", onchange: async () => {
-    const f = inp.files[0]; if (!f) return; pick.disabled = true;
-    try {
-      loadUI(box); await Engine.load(model); box.replaceChildren(h("div", { class: "ok" }, "Modello pronto."));
-      st.textContent = "Leggo il file…"; const ac = new (window.AudioContext || window.webkitAudioContext)(); const dec = await ac.decodeAudioData(await f.arrayBuffer()); ac.close();
-      const mono = dec.numberOfChannels > 1 ? (() => { const a = dec.getChannelData(0), b = dec.getChannelData(1), o = new Float32Array(a.length); for (let i = 0; i < a.length; i++) o[i] = (a[i] + b[i]) / 2; return o; })() : new Float32Array(dec.getChannelData(0));
-      const pcm = downsample(mono, dec.sampleRate), W = 16000 * 25, id = "n" + Date.now();
-      const note = { id, title: f.name.replace(/\.[^.]+$/, ""), created: Date.now(), duration: pcm.length / 16000, model, lang, status: "recording", segments: [], mime: f.type || "audio/mp4" };
-      await putNote(note); await putAudio(id, 0, f);
-      for (let o = 0, k = 0; o < pcm.length; o += W, k++) { st.textContent = `Trascrivo… ${Math.min(100, Math.round(100 * o / pcm.length))}%`; const r = await Engine.run(pcm.slice(o, o + W), lang); if (r.text) { note.segments.push({ start: o / 16000, text: r.text }); out.append(h("span", null, r.text + " ")); await putNote(note); } }
-      note.status = "done"; await putNote(note); go("#/note/" + id);
-    } catch (e) { st.replaceChildren(h("span", { class: "bad" }, "Errore: " + e.message + " (file troppo lungo o formato non leggibile? Prova un file più corto)")); pick.disabled = false; }
-  } });
-  const pick = h("button", { class: "primary", onclick: () => inp.click() }, "Scegli un file audio");
-  app.append(h("h1", null, "Carica un audio"), h("div", { class: "mut" }, "Es. le registrazioni mandate da un amico. Il file viene decodificato in memoria: per lezioni molto lunghe (oltre ~1 ora) conviene registrare dal vivo."), h("div", { class: "row" }, modelSel(), langSel()), box, h("div", { class: "row" }, pick, h("button", { onclick: () => go("#/") }, "Indietro")), inp, st, out);
+  const box = h("div"), list = h("div", { class: "group" }); let busy = false, firstId = null, okCount = 0;
+  const addRow = f => { const s = h("span", { class: "mut" }, "In attesa"); const row = h("div", { class: "cell" }, h("div", { class: "grow" }, h("div", { class: "t" }, f.name), h("div", { class: "m" }, `${(f.size / 1e6).toFixed(1)} MB`)), s); list.append(row); return s; };
+  const friendly = e => /decode|encoding|EncodingError|unable/i.test((e.name || "") + " " + (e.message || "")) ? "Safari non legge questo formato (es. .opus di WhatsApp, .amr, .wma). Convertilo in .m4a, .mp3 o .wav, oppure caricalo nell'app server (legge tutti i formati)." : (e.message || String(e));
+  async function run(files) {
+    files = [...files]; if (!files.length || busy) return; busy = true; pick.disabled = pickAll.disabled = true; okCount = 0; firstId = null; list.replaceChildren();
+    const stats = files.map(addRow);
+    try { loadUI(box); await Engine.load(model); box.replaceChildren(h("div", { class: "ok" }, "Modello pronto.")); }
+    catch (e) { box.replaceChildren(h("div", { class: "bad" }, "Modello non caricato: " + e.message)); busy = false; pick.disabled = pickAll.disabled = false; return; }
+    for (const [i, f] of files.entries()) {
+      const st = stats[i]; st.className = "mut"; st.textContent = "Leggo il file…";
+      try {
+        const pcm = await decodeToPcm(f), id = "n" + Date.now() + i, parts = splitSpeech(pcm);
+        const note = { id, title: f.name.replace(/\.[^.]+$/, ""), created: Date.now(), duration: pcm.length / 16000, model, lang, status: "recording", segments: [], mime: f.type || "audio/mp4" };
+        await putNote(note); await putAudio(id, 0, f);
+        for (const [k, [a, b]] of parts.entries()) { st.textContent = `Trascrivo… ${Math.round(100 * k / parts.length)}%`; const r = await Engine.run(pcm.slice(a, b), lang); if (r.text) { note.segments.push({ start: a / 16000, dur: (b - a) / 16000, text: r.text }); await putNote(note); } }
+        note.status = "done"; await putNote(note); st.className = "ok"; st.textContent = "✓ Fatto"; okCount++; firstId ||= id;
+      } catch (e) { st.className = "bad"; st.textContent = "✕ " + friendly(e); }
+    }
+    busy = false; pick.disabled = pickAll.disabled = false;
+    if (okCount === 1 && files.length === 1) go("#/note/" + firstId); else if (okCount) { toast(`${okCount} ${okCount === 1 ? "audio trascritto" : "audio trascritti"}`); box.append(h("button", { class: "primary", style: "margin-top:8px", onclick: () => go("#/recs") }, "Vai alle registrazioni")); }
+  }
+  const mk = accept => h("input", { type: "file", multiple: "", ...(accept ? { accept } : {}), style: "display:none", onchange: e => { const fl = [...e.target.files]; e.target.value = ""; run(fl); } });
+  const inp = mk(AUDIO_ACCEPT), inpAll = mk("");
+  const pick = h("button", { class: "primary", onclick: () => inp.click() }, "Scegli audio"), pickAll = h("button", { onclick: () => inpAll.click() }, "Tutti i file (se non vedi il tuo audio)");
+  const drop = h("div", { class: "card" }, h("div", { class: "row" }, pick, pickAll), h("div", { class: "mut", style: "margin-top:8px" }, "Puoi scegliere più file insieme o trascinarli qui (da Split View con l'app File)."));
+  drop.addEventListener("dragover", e => { e.preventDefault(); }); drop.addEventListener("drop", e => { e.preventDefault(); run(e.dataTransfer.files); });
+  app.append(h("h1", null, "Carica un audio"), h("div", { class: "sub" }, "Es. le registrazioni mandate da un amico (.m4a, .mp3, .wav…). Il file viene letto in memoria: per lezioni molto lunghe (oltre ~1 ora) conviene registrare dal vivo."),
+    h("div", { class: "row" }, modelSel(), langSel()), drop, box, list, inp, inpAll);
 }
 
 async function detail(id) {

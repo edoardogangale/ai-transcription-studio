@@ -28,6 +28,16 @@ await p.click(".back"); await p.waitForSelector(".cell");
 ok("compare in archivio", await p.locator(".cell >> text=Lezione").count() >= 1);
 await p.locator(".cell >> text=Lezione").first().click(); await p.click(".pills >> text=Elimina"); await p.click(".modal button.primary"); await p.waitForSelector("text=Nessuna registrazione");
 ok("elimina con conferma in-app", true);
+// carica audio: più file insieme, uno illeggibile
+await p.click("#side >> text=Carica audio"); await p.waitForSelector("text=Scegli audio");
+ok("selettore con elenco esteso di formati e «Tutti i file»", (await p.locator("input[type=file] >> nth=0").getAttribute("accept")).includes(".m4a") && await p.locator("text=Tutti i file").count() === 1);
+fs.writeFileSync("/tmp/voce-whatsapp.opus", Buffer.from("non e' audio, e' un finto file .opus"));
+await p.setInputFiles("input[type=file] >> nth=0", [wav, "/tmp/voce-whatsapp.opus"]);
+await p.waitForSelector("text=✓ Fatto", { timeout: 60000 }); await p.waitForSelector("text=✕", { timeout: 30000 });
+ok("il file buono viene trascritto", await p.locator("text=✓ Fatto").count() === 1);
+ok("il file illeggibile dà un messaggio chiaro (formato, come convertirlo)", /Safari non legge questo formato.*m4a/.test(await p.locator("text=✕").first().innerText()));
+await p.click("text=Vai alle registrazioni"); await p.waitForSelector(".cell >> text=" + path.basename(wav).replace(/\.[^.]+$/, ""));
+ok("l'audio caricato compare tra le registrazioni", true);
 await p.click("#side >> text=Impostazioni"); await p.waitForSelector("text=Microfono"); ok("schermata impostazioni/test", true);
 ok("nessun errore JS / dialogo nativo", errs.length === 0, errs.join(" | "));
 await b.close(); srv.close(); process.exit(done());

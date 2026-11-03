@@ -16,6 +16,11 @@ await p.click(".fab.rec"); await p.waitForSelector("text=■ Stop", { timeout: 1
 await p.waitForTimeout(20000);
 const live = await p.locator(".tx").innerText(); ok("trascrizione live compare", /frase \d+/.test(live), live.slice(0, 80));
 await p.click("text=Pausa"); await p.waitForSelector("text=Riprendi"); await p.click("text=Riprendi"); ok("pausa/riprendi", true);
+// app in secondo piano: al ritorno segnala il buco di audio (simulato: sfondo per 20 s senza dati)
+await p.evaluate(() => { const real = Date.now.bind(Date); window.__off = 0; Date.now = () => real() + window.__off; Object.defineProperty(document, "hidden", { get: () => window.__hid, configurable: true }); window.__hid = true; document.dispatchEvent(new Event("visibilitychange")); window.__off = 20000; window.__hid = false; document.dispatchEvent(new Event("visibilitychange")); });
+await p.waitForTimeout(500);
+ok("in secondo piano: al ritorno avvisa dei secondi senza audio e suggerisce Split View", /secondo piano.*Split View/.test(await p.locator(".ink-text.transcript").innerText()));
+
 await p.click("text=■ Stop"); await p.waitForSelector("text=Copia testo", { timeout: 15000 }); ok("salvato e aperto il dettaglio", true);
 ok("audio salvato (player presente)", await p.locator("audio").count() === 1);
 ok("segmenti mostrati", await p.locator(".tx .spoken span").count() >= 1, (await p.locator(".tx .spoken span").count()) + " parole");

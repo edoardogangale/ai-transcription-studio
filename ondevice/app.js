@@ -248,9 +248,19 @@ async function rec() {
   let mr; try { mr = new MediaRecorder(stream); mr.ondataavailable = e => { if (e.data.size) putAudio(id, ai++, e.data); }; mr.start(5000); note.mime = mr.mimeType; } catch { tv.meta("Il salvataggio dell'audio non è supportato su questo browser: avrai solo il testo.", "bad"); }
   try { wake = await navigator.wakeLock?.request("screen"); } catch {}
   const tick = setInterval(() => { const l = Math.max(0, received - doneTo); status.textContent = `${paused ? "❚❚" : "●"} ${fmt(received)}`; status.classList.toggle("paused", paused); lag.textContent = pending ? ` · ritardo ~${Math.round(l)} s` + (l > 45 ? " (modello lento: scegline uno più piccolo)" : "") : ""; }, 500);
-  btn.disabled = false; btn.textContent = "■ Stop"; pauseB.disabled = false;
+  btn.disabled = false; btn.textContent = "■ Stop"; pauseB.disabled = false; recBusy = true;
+  // app in secondo piano: iPadOS ferma il microfono delle pagine web. Al ritorno riprende e segna il buco (Split View / Slide Over evitano il problema)
+  let hiddenAt = 0, recvAtHide = 0;
+  const onVis = async () => {
+    if (stopped) return;
+    if (document.hidden) { hiddenAt = Date.now(); recvAtHide = received; return; }
+    try { await ctx.resume(); } catch {}
+    if (!hiddenAt) return; const gap = (Date.now() - hiddenAt) / 1000, lost = gap - (received - recvAtHide); hiddenAt = 0;
+    if (!paused && lost > 3) { const msg = `⚠ ${fmt(received)} · app in secondo piano: ${Math.round(lost)} s senza audio (limite di iPadOS). Per registrare mentre usi un'altra app, apri questa in Split View o Slide Over.`; tv.meta(msg, "bad"); nb.addTranscriptMeta(msg); }
+  };
+  document.addEventListener("visibilitychange", onVis);
   pauseB.onclick = () => { paused = !paused; if (mr) try { paused ? mr.pause() : mr.resume(); } catch {} pauseB.textContent = paused ? "Riprendi" : "Pausa"; { const m = paused ? `❚❚ In pausa · ${fmt(received)}` : `▶ Ripresa · ${fmt(received)}`; tv.meta(m); nb.addTranscriptMeta(m); } };
-  finishFn = async () => { if (stopped) return; stopped = true; clearInterval(tick); btn.disabled = true; btn.textContent = "Salvo…"; seg.flush(); try { mr && mr.state !== "inactive" && mr.stop(); } catch {} stream.getTracks().forEach(t => t.stop()); proc.disconnect(); ctx.close(); wake && wake.release().catch(() => {}); await chain; await new Promise(r => setTimeout(r, 400)); note.status = "done"; note.duration = received; await putNote(note); await putPage(nb.page); window.onbeforeunload = null; };
+  finishFn = async () => { if (stopped) return; stopped = true; recBusy = false; document.removeEventListener("visibilitychange", onVis); clearInterval(tick); btn.disabled = true; btn.textContent = "Salvo…"; seg.flush(); try { mr && mr.state !== "inactive" && mr.stop(); } catch {} stream.getTracks().forEach(t => t.stop()); proc.disconnect(); ctx.close(); wake && wake.release().catch(() => {}); await chain; await new Promise(r => setTimeout(r, 400)); note.status = "done"; note.duration = received; await putNote(note); await putPage(nb.page); window.onbeforeunload = null; };
   btn.onclick = async () => { await finishFn(); go("#/note/" + id); };
   window.onbeforeunload = () => stopped ? null : "Registrazione in corso";
 }
@@ -313,7 +323,8 @@ async function pageView(id) {
 
 async function settings() {
   const out = h("div", { class: "group" }), box = h("div"), r = h("div", { class: "mut", style: "padding:8px 12px" });
-  const ms = modelSel(), cached = h("span", { class: "mut" });
+  const ms = modelSel(), cached = h("span", { class: "mut" }), ver = h("span", { class: "mut" }, "…");
+  (async () => { try { const k = (await caches.keys()).find(x => /^od-shell-v\d+/.test(x)); ver.textContent = k ? "n. " + k.replace(/\D+/, "") : "–"; } catch { ver.textContent = "–"; } })();
   const refresh = async () => { const m = cfg.get("model", "onnx-community/whisper-small"), ok = await DL.isCached(m, navigator.gpu ? "webgpu" : "wasm"); cached.textContent = ok ? "✓ scaricato" : `non scaricato (~${(MODELS[m] || [0, 0])[1]} MB)`; cached.className = ok ? "ok" : "mut"; };
   ms.addEventListener("change", refresh); refresh();
   const chk = (ok, t) => h("div", { class: "cell" }, h("span", { class: "chk" }, h("span", { class: "d" + (ok ? "" : " no") }, ok ? "✓" : "✕")), h("div", { class: "grow" }, t));
@@ -326,11 +337,23 @@ async function settings() {
       h("div", { class: "cell" }, h("span", { class: "ico", html: ic.cpu }), h("div", { class: "grow" }, "Modello", h("div", null, cached)), ms),
       h("div", { class: "cell" }, h("span", { class: "ico", style: "background:#34a853", html: ic.globe }), h("div", { class: "grow" }, "Lingua"), langSel())),
     h("div", { class: "row", style: "margin:12px 0" }, test), box, r,
+    h("h2", null, "App"), h("div", { class: "group" },
+      h("div", { class: "cell" }, h("div", { class: "grow" }, "Versione", h("div", { class: "mut" }, "Si aggiorna da sola quando riapri l'app (se serve, tocca «Aggiorna ora»).")), ver),
+      h("button", { class: "cell", onclick: async () => { toast("Aggiorno…"); try { const reg = await navigator.serviceWorker.getRegistration(); await reg?.update(); for (const k of await caches.keys()) if (k.startsWith("od-shell-")) await caches.delete(k); } catch {} location.reload(); } }, h("div", { class: "grow", style: "color:var(--tint)" }, "Aggiorna ora"))),
     h("h2", null, "Questo iPad"), out,
     h("h2", null, "Privacy"), h("div", { class: "card mut" }, "Audio, testi e appunti restano nell'archivio del browser di questo iPad. Nessun server, nessun account. Se cancelli i dati di Safari per questo sito, l'archivio si cancella: condividi l'audio o copia il testo di ciò che vuoi conservare."));
 }
 
 document.head.append(h("style", null, INK_CSS));
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+let recBusy = false;   // c'è una registrazione in corso: niente ricarica automatica
+if ("serviceWorker" in navigator) {
+  const had = !!navigator.serviceWorker.controller; let reloaded = false;
+  navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then(reg => {
+    const chk = () => reg.update().catch(() => {}); setInterval(chk, 20 * 60e3); document.addEventListener("visibilitychange", () => { if (!document.hidden) chk(); });
+  }).catch(() => {});
+  navigator.serviceWorker.addEventListener("controllerchange", () => {   // è arrivata una versione nuova: ricarica (a meno che si stia registrando)
+    if (!had || reloaded) return; if (recBusy) { toast("Aggiornamento pronto: si applica alla prossima apertura"); return; } reloaded = true; location.reload();
+  });
+}
 // recupero: registrazioni rimaste "in corso" dopo una chiusura improvvisa
 (async () => { for (const n of await allNotes()) if (n.status === "recording" && Date.now() - n.created > 60000 && !(location.hash || "").includes(n.id)) { n.status = "interrupted"; await putNote(n); } route(); })();

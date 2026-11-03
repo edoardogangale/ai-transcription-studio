@@ -9,7 +9,7 @@ const b = await chromium.launch({ args: ["--use-fake-ui-for-media-stream", "--us
 const ctx = await b.newContext({ viewport: { width: 1366, height: 1024 }, hasTouch: true, permissions: ["microphone"], deviceScaleFactor: 2 });
 await ctx.route("https://huggingface.co/**", r => { const rg = r.request().headers()["range"], body = Buffer.alloc(1000, 1), m = rg && /bytes=(\d+)-(\d+)/.exec(rg), cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Expose-Headers": "Content-Range" }; if (m) { const a = +m[1], b = Math.min(+m[2], 999); return r.fulfill({ status: 206, headers: { ...cors, "Content-Range": `bytes ${a}-${b}/1000` }, body: body.subarray(a, b + 1) }); } r.fulfill({ status: 200, headers: cors, body }); });   // pesi finti (il modello vero non si scarica nei test)
 await ctx.route("https://cdn.jsdelivr.net/**", r => r.fulfill({ contentType: "text/javascript", body: FAKE }));
-const p = await ctx.newPage(); const errs = []; p.on("pageerror", e => errs.push(e.message)); p.on("dialog", d => { errs.push("dialog " + d.message()); d.dismiss(); });
+const p = await ctx.newPage(); const cdp = await ctx.newCDPSession(p); const errs = []; p.on("pageerror", e => errs.push(e.message)); p.on("dialog", d => { errs.push("dialog " + d.message()); d.dismiss(); });
 const pages = () => p.evaluate(() => new Promise(res => { const r = indexedDB.open("od-studio", 2); r.onsuccess = () => { const q = r.result.transaction("pages").objectStore("pages").getAll(); q.onsuccess = () => res(q.result); }; }));
 const cur = async () => { await p.waitForTimeout(1900); const ps = await pages(); return ps.sort((a, b) => b.updated - a.updated)[0]; };
 const box = async () => p.locator(".ink-stage").boundingBox();
@@ -67,6 +67,16 @@ await p.click("[aria-label=Foglio]"); await p.click(".ink-pop >> text=Quadretti"
   const before = (await cur()).strokes.length; await draw(Array.from({ length: 60 }, (_, i) => [180 + i * 9, 640 + Math.sin(i / 8) * 25 + ((i * 7) % 5) - 2]));
   const sm = (await cur()).strokes; ok("con stabilizzazione alta il tratto si salva comunque", sm.length === before + 1 && sm.at(-1).pts.length > 90, `${sm.at(-1).pts.length / 3} punti`);
   await setStab(35);
+}
+// anteprima della punta: spenta di base (richiesta), attivabile da ⋯; schema chiaro mentre il quaderno è aperto
+{
+  const liveInk = () => p.evaluate(() => { const c = document.querySelectorAll(".ink-c")[1], d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i]) n++; return n; });
+  const hover = async (x, y) => { const s = await box(); await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: s.x + x, y: s.y + y, button: "none", buttons: 0, pointerType: "pen" }); await p.waitForTimeout(200); };
+  await p.click("[aria-label=Penna]"); await hover(300, 500); ok("anteprima della punta spenta di base: nessun puntino sul foglio", (await liveInk()) === 0);
+  ok("schema chiaro mentre il quaderno è aperto (niente sfumatura scura della barra di stato)", await p.evaluate(() => document.documentElement.style.colorScheme) === "light");
+  await p.click("[aria-label=Altro]"); await p.locator(".ink-pop label:has-text('Anteprima della punta') input").check(); await p.mouse.move(5, 5); await p.mouse.down(); await p.mouse.up();
+  await hover(320, 520); ok("attivandola dal menu ⋯ compare l'anteprima", (await liveInk()) > 0);
+  await p.click("[aria-label=Altro]"); await p.locator(".ink-pop label:has-text('Anteprima della punta') input").uncheck(); await p.mouse.move(5, 5); await p.mouse.down(); await p.mouse.up();
 }
 // pulsanti della Apple Pencil: arrivano da un'app nativa (ios/) come evento "pencil"
 await p.evaluate(() => window.dispatchEvent(new CustomEvent("pencil", { detail: { type: "doubleTap" } })));

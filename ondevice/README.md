@@ -2,7 +2,7 @@
 
 App web installabile: la trascrizione (Whisper) gira **dentro Safari sull'iPad**. Nessun server, nessun account, nessun dato inviato: audio e testi restano nell'archivio del browser di quell'iPad. Ogni amico che apre il link ha il **proprio** archivio, separato dal tuo.
 
-**Non provata su Safari/iPad reali**: collaudata solo con un modello finto in Chromium (interfaccia, VAD, salvataggio, elimina; quaderno con mouse e tocchi simulati: `tests/e2e/e2e_ink.mjs`, 44 controlli). Il caricamento del modello vero va verificato sull'iPad.
+**Non provata su Safari/iPad reali**: collaudata solo con un modello finto in Chromium (interfaccia, VAD, salvataggio, elimina; quaderno con mouse e tocchi simulati: `tests/e2e/e2e_ink.mjs`, 47 controlli). Il caricamento del modello vero va verificato sull'iPad.
 
 ## Pubblicazione (una volta sola, GitHub Pages gratuito)
 1. GitHub → repository → **Settings → Pages → Source: GitHub Actions**. (Con l'account gratuito il repository deve essere **pubblico**: il codice è visibile, i dati degli utenti no.)
@@ -48,6 +48,11 @@ Il foglio è disegnato alla risoluzione del display: fino a 3× (iPad Pro), anch
 
 ## Download del modello (Whisper Large v3 Turbo si bloccava)
 Causa probabile: per Turbo l'app chiedeva il codificatore a precisione piena (molti GB) e Safari restava fermo. Ora Turbo usa la versione q4 (~0,8 GB in tutto). Il download è **a pezzi da 8 MB con ripresa**: se per 25 s non arriva nulla, interrompe e riprova (fino a 8 volte); i pezzi già scaricati restano anche se chiudi l'app; schermo acceso e archivio persistente durante il download. In *Impostazioni* vedi se il modello è già «✓ scaricato». Provato con un finto server (rete che cade, richieste bloccate, niente Range, ripresa): `tests/e2e/e2e_download.mjs` (15 controlli). **Non provato col vero Hugging Face** (da qui non è raggiungibile): se il blocco resta, mandami il messaggio che compare.
+
+## Aggiornare l'app, e registrare con un'altra app aperta
+- **Aggiornamento**: dopo ogni modifica attendi che *Actions* sia verde (1–2 min), poi **chiudi del tutto l'app** (scorri via dal selettore app) e riaprila: ora si scarica da sola la versione nuova e ricarica. In *Impostazioni → App* vedi il numero di versione e «Aggiorna ora».
+- **Registrazione in secondo piano**: iPadOS ferma il microfono delle pagine web quando l'app non è visibile (vale per Safari e per le app sulla Home). Soluzione pratica: **Split View / Slide Over / Stage Manager** (l'app resta visibile e continua). Se esci comunque, al ritorno l'app riprende e scrive nel foglio «⚠ N s senza audio». Con l'involucro nativo in `ios/` (Background Modes → Audio) dovrebbe continuare anche in secondo piano: non provato.
+- L'anteprima della punta sopra lo schermo è **spenta di base**; si attiva da ⋯.
 
 ## Limiti
 - Modelli più piccoli di quelli del server: qualità più bassa, soprattutto in italiano. Niente riconoscimento dei parlanti né correzione AI.

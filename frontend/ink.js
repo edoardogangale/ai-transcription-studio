@@ -193,12 +193,15 @@ function drawPaper(ctx, page, vx0, vy0, vx1, vy1, z) {
 // ---------- il quaderno ----------
 export function createNotebook(host, page, opts = {}) {
   page.strokes ||= []; page.texts ||= []; page.paper ||= { type: "lines", gap: 32, color: "#ffffff" }; page.w ||= 820; page.h ||= 1160;
-  const st = { stab: +(localStorage.getItem("ink_stab") ?? 35), shapes: localStorage.getItem("ink_shapes") !== "0", tool: localStorage.getItem("ink_tool") || "pen", prev: "eraser", colors: {}, sizes: {}, eraserMode: localStorage.getItem("ink_er") || "object", fingerDraw: localStorage.getItem("ink_finger") === "1", ruler: null };
+  const st = { hover: localStorage.getItem("ink_hover") === "1", stab: +(localStorage.getItem("ink_stab") ?? 35), shapes: localStorage.getItem("ink_shapes") !== "0", tool: localStorage.getItem("ink_tool") || "pen", prev: "eraser", colors: {}, sizes: {}, eraserMode: localStorage.getItem("ink_er") || "object", fingerDraw: localStorage.getItem("ink_finger") === "1", ruler: null };
   try { Object.assign(st.colors, JSON.parse(localStorage.getItem("ink_colors") || "{}")); Object.assign(st.sizes, JSON.parse(localStorage.getItem("ink_sizes") || "{}")); } catch {}
   const colorOf = t => st.colors[t] || (t === "marker" ? HL_COLORS[0] : COLORS[0]), sizeOf = t => st.sizes[t] || TOOLS[t][1];
-  const persist = () => { try { localStorage.setItem("ink_tool", st.tool); localStorage.setItem("ink_colors", JSON.stringify(st.colors)); localStorage.setItem("ink_sizes", JSON.stringify(st.sizes)); localStorage.setItem("ink_er", st.eraserMode); localStorage.setItem("ink_finger", st.fingerDraw ? "1" : "0"); localStorage.setItem("ink_shapes", st.shapes ? "1" : "0"); localStorage.setItem("ink_stab", String(st.stab)); } catch {} };
+  const persist = () => { try { localStorage.setItem("ink_tool", st.tool); localStorage.setItem("ink_colors", JSON.stringify(st.colors)); localStorage.setItem("ink_sizes", JSON.stringify(st.sizes)); localStorage.setItem("ink_er", st.eraserMode); localStorage.setItem("ink_finger", st.fingerDraw ? "1" : "0"); localStorage.setItem("ink_shapes", st.shapes ? "1" : "0"); localStorage.setItem("ink_stab", String(st.stab)); localStorage.setItem("ink_hover", st.hover ? "1" : "0"); } catch {} };
 
   const root = el("div", { class: "ink" });
+  // il foglio è sempre chiaro: dillo al sistema, così la barra di stato non mette una sfumatura scura sopra la barra degli strumenti
+  const prevScheme = document.documentElement.style.colorScheme, metas = [...document.querySelectorAll('meta[name="theme-color"]')], prevMetas = metas.map(m => m.content);
+  document.documentElement.style.colorScheme = "light"; metas.forEach(m => { m.content = "#f9f9f9"; });
   const stage = el("div", { class: "ink-stage" });
   const bg = el("canvas", { class: "ink-c" }), live = el("canvas", { class: "ink-c" });
   const textLayer = el("div", { class: "ink-texts" });
@@ -465,7 +468,7 @@ export function createNotebook(host, page, opts = {}) {
   stage.addEventListener("pointermove", e => {
     const [sx, sy] = local(e);
     if (e.pointerType === "pen") lastPen = performance.now();
-    if (!penDown && (e.pointerType === "pen" || e.pointerType === "mouse") && e.buttons === 0) { hoverAt = [sx, sy, e.pointerType]; schedule(); return; }
+    if (!penDown && st.hover && (e.pointerType === "pen" || e.pointerType === "mouse") && e.buttons === 0) { hoverAt = [sx, sy, e.pointerType]; schedule(); return; }
     if (e.pointerId === penId && penDown) {
       e.preventDefault();
       if (Math.hypot(sx - startPt[0], sy - startPt[1]) > 4) { moved = true; clearTimeout(quickT); }
@@ -586,7 +589,7 @@ export function createNotebook(host, page, opts = {}) {
     return el("div", null, el("div", { class: "mut" }, "Stabilizzazione del tratto: leviga il tremore (0 = nessuna)"), el("div", { class: "row" }, r, v));
   }
   function moreMenu() {
-    popup(moreB, stabRow(), el("label", { class: "row" }, el("input", { type: "checkbox", ...(st.shapes ? { checked: "" } : {}), onchange: e => { st.shapes = e.target.checked; persist(); } }), " Forme perfette (tieni ferma la penna a fine tratto)"), el("label", { class: "row" }, el("input", { type: "checkbox", ...(st.fingerDraw ? { checked: "" } : {}), onchange: e => { st.fingerDraw = e.target.checked; persist(); } }), " Scrivi anche col dito (senza Apple Pencil)"),
+    popup(moreB, stabRow(), el("label", { class: "row" }, el("input", { type: "checkbox", ...(st.hover ? { checked: "" } : {}), onchange: e => { st.hover = e.target.checked; if (!st.hover) { hoverAt = null; schedule(); } persist(); } }), " Anteprima della punta quando la Pencil è sopra lo schermo"), el("label", { class: "row" }, el("input", { type: "checkbox", ...(st.shapes ? { checked: "" } : {}), onchange: e => { st.shapes = e.target.checked; persist(); } }), " Forme perfette (tieni ferma la penna a fine tratto)"), el("label", { class: "row" }, el("input", { type: "checkbox", ...(st.fingerDraw ? { checked: "" } : {}), onchange: e => { st.fingerDraw = e.target.checked; persist(); } }), " Scrivi anche col dito (senza Apple Pencil)"),
       el("div", { class: "mut" }, "Pencil: scrive · dito: scorre, pizzica per lo zoom · 2 dita tocco: annulla · 3 dita: ripristina · penna ferma all'inizio: strumenti rapidi · penna ferma a fine tratto: forma perfetta"),
       el("button", { onclick: () => { closePop(); exportPNG(); } }, "Esporta immagine (PNG)"),
       el("button", { class: "danger", onclick: () => { pushUndo(); page.strokes = []; page.texts = []; renderTexts(); changed(); closePop(); } }, "Svuota pagina"));
@@ -651,7 +654,7 @@ export function createNotebook(host, page, opts = {}) {
   return {
     addTranscript, addTranscriptMeta,
     el: root, undo, redo, setTool, swapTool, exportPNG, get page() { return page; }, get state() { return st; }, cam: () => ({ ...cam }),
-    destroy() { window.removeEventListener("pencil", onPencil); document.removeEventListener("visibilitychange", onHide); window.removeEventListener("pagehide", onHide); ro.disconnect(); cancelAnimationFrame(raf); cancelAnimationFrame(momentum); clearTimeout(saveT); opts.onChange && opts.onChange(page); root.remove(); },
+    destroy() { document.documentElement.style.colorScheme = prevScheme; metas.forEach((m, i) => { m.content = prevMetas[i]; }); window.removeEventListener("pencil", onPencil); document.removeEventListener("visibilitychange", onHide); window.removeEventListener("pagehide", onHide); ro.disconnect(); cancelAnimationFrame(raf); cancelAnimationFrame(momentum); clearTimeout(saveT); opts.onChange && opts.onChange(page); root.remove(); },
   };
 }
 

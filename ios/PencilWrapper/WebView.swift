@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import AVFoundation
 
 /// WKWebView che inoltra alla pagina i pulsanti della Apple Pencil (doppio tocco e stretta della Pencil Pro):
 /// Safari non li espone, solo le app native tramite UIPencilInteraction.
@@ -9,6 +10,9 @@ struct WebView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> WKWebView {
+        // Registrazione anche con l'app in secondo piano: sessione audio "registra e riproduci" + modalità Background "Audio" (vedi README)
+        try? AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .default, options: [.mixWithOthers, .defaultToSpeaker, .allowBluetooth])
+        try? AVAudioSession.sharedInstance().setActive(true)
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []

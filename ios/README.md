@@ -10,10 +10,14 @@ Il quaderno (`ink.js`) lo ascolta già: doppio tocco = gomma ↔ strumento (come
 1. Xcode → *File → New → Project → iOS → App*. Nome: `PencilWrapper`, Interface: **SwiftUI**, Language: **Swift**.
 2. Cancella `ContentView.swift` creato da Xcode e trascina nel progetto i tre file di questa cartella: `PencilWrapperApp.swift`, `ContentView.swift`, `WebView.swift` (sostituisci `PencilWrapperApp.swift` se esiste già).
 3. Nel target → *Info* aggiungi la chiave **Privacy - Microphone Usage Description** con un testo tipo «Serve per trascrivere le lezioni».
+   Per **registrare anche usando un'altra app**: target → *Signing & Capabilities* → **+ Capability → Background Modes** → spunta **Audio, AirPlay, and Picture in Picture**. (Da Safari / dalla Home Screen questo è impossibile: iPadOS ferma il microfono delle pagine web quando l'app va in secondo piano.)
 4. Target → *Signing & Capabilities*: scegli il tuo **Team** (il tuo Apple ID) e un *Bundle Identifier* unico.
 5. Sull'iPad: *Impostazioni → Privacy e sicurezza → Modalità sviluppatore → On* (riavvia). Collega l'iPad al Mac, scegline il nome in alto in Xcode e premi **Run**.
 6. Sull'iPad, la prima volta: *Impostazioni → Generali → VPN e gestione dispositivo* → fidati del tuo Apple ID.
 7. Apri l'app: di base carica l'app «Sul dispositivo»; con l'ingranaggio in basso a sinistra cambi indirizzo (es. quello del Codespace).
+
+## Registrazione in secondo piano (non provata)
+Con la capability *Background Modes → Audio* e la sessione audio impostata in `WebView.swift`, iPadOS dovrebbe tenere vivo il microfono quando passi a un'altra app. Non l'ho potuto provare: se non funziona, dimmelo. Senza l'involucro, apri l'app in **Split View** o **Slide Over** (resta visibile, quindi continua a registrare).
 
 ## Cosa fa la Apple Pencil
 - Doppio tocco: usa l'azione scelta in *Impostazioni → Apple Pencil* solo se l'app la gestisce; qui arriva alla pagina e cambia strumento.

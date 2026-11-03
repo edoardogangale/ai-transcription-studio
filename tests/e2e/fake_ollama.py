@@ -1,7 +1,8 @@
 """Finto server compatibile con Ollama per i collaudi (NON è un LLM): corregge 'parola0' -> 'Parola0' (solo maiuscola: le cifre non vanno mai toccate) e segna come
 fuori tema le righe che contengono 'parolina'. Serve a verificare l'interfaccia e le protezioni, non la qualità dell'AI."""
-import json, re, sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import json, re, sys, time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+DELAY = float(sys.argv[2]) if len(sys.argv) > 2 else 0   # secondi per richiesta: serve a provare avanzamento, parallelo e stop
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
@@ -16,9 +17,10 @@ class H(BaseHTTPRequestHandler):
             for done in (0, 400, 1000):
                 self.wfile.write((json.dumps({"status": "pulling", "digest": "d", "total": 1000, "completed": done}) + "\n").encode()); self.wfile.flush()
             self.wfile.write(b'{"status":"success"}\n'); return
-        user = body["messages"][1]["content"]; out = []
+        time.sleep(DELAY); user = body["messages"][1]["content"]; out = []
         for n, text in re.findall(r"^\[(\d+)\] (.*)$", user.split("Righe da correggere:")[1], flags=re.M):
             out.append({"n": int(n), "text": text.replace("parola0", "Parola0", 1), "off_topic": "parolina" in text})
-        self._send({"message": {"content": json.dumps({"lines": out})}})
+        try: self._send({"message": {"content": json.dumps({"lines": out})}})
+        except (BrokenPipeError, ConnectionResetError): pass
 
-HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()

@@ -96,16 +96,18 @@ async function aiBatch(ids) {
   }
   const model = h("select", null, installed.map(m => h("option", { value: m, selected: m.startsWith("qwen3:4b") }, m)));
   const scope = h("select", null, h("option", { value: "flagged" }, "Solo i punti dubbi (più veloce)"), h("option", { value: "all" }, "Tutto il testo (più lento, più completo)"));
+  const par = h("select", null, [1, 2, 3, 4].map(n => h("option", { value: n, selected: n === 2 }, n === 1 ? "1 (una alla volta)" : n + " insieme")));
   const off = h("input", { type: "checkbox", checked: true });
   const instr = h("textarea", { placeholder: "Facoltative. Se le lasci vuote usa quelle della cartella di ogni trascrizione.", style: "min-height:70px" });
   const cfg = await modal(`✨ Correggi con AI ${ids.length} trascrizioni`, h("div", { class: "grid" },
-    h("p", { class: "m" }, "L'AI controlla le trascrizioni una dopo l'altra (non insieme, per non sovraccaricare il computer) e PROPONE correzioni: non cambia nulla finché non approvi. Alla fine le rivedi e le applichi tutte con un clic."),
+    h("p", { class: "m" }, "L'AI controlla le trascrizioni (alcune alla volta: la scelta è qui sotto) e PROPONE correzioni: non cambia nulla finché non approvi. Alla fine le rivedi e le applichi tutte con un clic."),
     h("div", null, h("label", null, "Modello"), model), h("div", null, h("label", null, "Cosa controllare"), scope),
+    h("div", null, h("label", null, "Quante trascrizioni insieme"), par, h("div", { class: "m" }, "Più insieme = più RAM; si va davvero più veloci solo se Ollama le gestisce in parallelo (OLLAMA_NUM_PARALLEL, di base 2 con lo script di installazione).")),
     h("label", { class: "opt" }, off, "Segnala anche le parti fuori tema (le escludi tu)"), h("div", null, h("label", null, "Istruzioni per l'AI"), instr)),
-    [["Annulla", null], [`✨ Avvia su ${ids.length}`, () => ({ model: model.value, scope: scope.value, off: off.checked, instr: instr.value.trim() }), "primary"]]);
+    [["Annulla", null], [`✨ Avvia su ${ids.length}`, () => ({ model: model.value, scope: scope.value, off: off.checked, instr: instr.value.trim(), par: +par.value }), "primary"]]);
   if (!cfg) return;
   let res;
-  try { res = await api("/api/ai/review-batch", { json: { ids, model: cfg.model, scope: cfg.scope, instructions: cfg.instr, off_topic: cfg.off } }); }
+  try { res = await api("/api/ai/review-batch", { json: { ids, model: cfg.model, scope: cfg.scope, instructions: cfg.instr, off_topic: cfg.off, parallel: cfg.par } }); }
   catch (e) { toast(e.message, 7000); return; }
   if (!res.started.length) { toast("Nessuna trascrizione da controllare: " + (res.skipped.map(s => `${s.title || s.id}: ${s.reason}`).join("; ") || "elenco vuoto"), 8000); return; }
   if (res.skipped.length) toast(`${res.skipped.length} saltate (${res.skipped.map(s => s.reason).filter((v, i, a) => a.indexOf(v) === i).join(", ")})`, 6000);
@@ -118,11 +120,18 @@ function aiBatchDialog(ids) {
   let iv = null, phase = "run", sel = new Map(), data = new Map(), closed = false;
   d.addEventListener("close", () => { closed = true; clearInterval(iv); d.remove(); });
   const chipFor = i => ({ none: ["", "—"], queued: ["", "In coda"], running: ["warn", `In corso ${i.done}/${i.total || "…"}`], done: ["ok", `✓ ${i.edits} ${i.edits === 1 ? "correzione" : "correzioni"} · ${i.off_topic} fuori tema`], cancelled: ["", "Fermata"], error: ["bad", "Errore"] }[i.status] || ["", i.status]);
-  const drawRun = r => {
+  const stopB = h("button", { class: "danger", onclick: async () => {   // ferma SUBITO (il server interrompe la richiesta in corso) e chiude
+      stopB.disabled = true; clearInterval(iv); try { await api("/api/ai/review-batch/cancel", { method: "POST" }); } catch (e) { showErr(e.message); } toast("Correzione AI fermata: le trascrizioni già finite restano rivedibili dal loro pannello", 5000); d.close(); } }, "Ferma"),
+    closeB = h("button", { onclick: () => d.close() }, "Chiudi");
+  foot.replaceChildren(stopB, closeB);
+  const bar = h("i", { style: "width:3%" }), msg = h("p", { class: "m" }), listEl = h("div", { class: "list" });
+  const drawRun = r => {   // si aggiornano solo testi e barra: i pulsanti restano gli stessi nodi
     const total = r.items.length, fin = r.items.filter(i => ["done", "error", "cancelled", "none"].includes(i.status)).length;
-    body.replaceChildren(h("div", { class: "bar" }, h("i", { style: `width:${total ? Math.max(3, 100 * fin / total) : 3}%` })), h("p", { class: "m" }, `${fin} di ${total} completate. Puoi chiudere: le proposte restano salvate in ogni trascrizione e si rivedono dal suo pannello «Correzione con AI».`),
-      h("div", { class: "list" }, r.items.map(i => { const [c, t] = chipFor(i); return h("div", { class: "item" }, h("div", { class: "grow t" }, i.title), h("span", { class: "chip " + c }, t), i.error && h("div", { class: "m err" }, i.error)); })));
-    foot.replaceChildren(r.active ? h("button", { class: "danger", onclick: () => api("/api/ai/review-batch/cancel", { method: "POST" }).then(() => toast("Fermo dopo la trascrizione in corso…")) }, "Ferma") : null, h("button", { onclick: () => d.close() }, "Chiudi"));
+    if (!bar.isConnected) body.replaceChildren(h("div", { class: "bar" }, bar), msg, listEl);
+    bar.style.width = (total ? Math.max(3, 100 * fin / total) : 3) + "%";
+    msg.textContent = `${fin} di ${total} completate. Puoi chiudere: la correzione continua sul server e la trovi nelle Attività (in alto); le proposte restano salvate in ogni trascrizione.`;
+    listEl.replaceChildren(...r.items.map(i => { const [c, t] = chipFor(i); return h("div", { class: "item" }, h("div", { class: "grow t" }, i.title), h("span", { class: "chip " + c }, t), i.error && h("div", { class: "m err" }, i.error)); }));
+    stopB.style.display = r.active ? "" : "none";
   };
   const review = async r => {
     phase = "review"; const ok = r.items.filter(i => i.status === "done" && (i.edits || i.off_topic));

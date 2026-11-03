@@ -403,3 +403,85 @@ def test_batch_review_is_private(client, ollama, protected):
     r = client.post("/api/ai/review-batch", json={"ids": [mine], "model": "qwen3:4b"}, headers=sara).json()
     assert r["started"] == [] and r["skipped"][0]["reason"] == "non trovata"
     assert client.post("/api/ai/apply-batch", json={"items": [{"id": mine, "edits": [0]}]}, headers=sara).json()["transcripts"] == 0
+
+
+# ------------------------------------------------------------------ in parallelo, nelle Attività, stop immediato
+@pytest.fixture()
+def ollama_slow(monkeypatch):
+    """Finto Ollama MULTI-richiesta e lento (0,4 s per passaggio; regolabile con .delay)."""
+    from http.server import ThreadingHTTPServer
+    orig = FakeOllama.do_POST
+    box = {"delay": 0.4}
+
+    def slow(self):
+        time.sleep(box["delay"])
+        try:
+            return orig(self)
+        except (BrokenPipeError, ConnectionResetError):   # il client ha chiuso (stop): normale
+            return None
+    monkeypatch.setattr(FakeOllama, "do_POST", slow)
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), FakeOllama)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    monkeypatch.setattr(config, "OLLAMA_URL", f"http://127.0.0.1:{srv.server_port}")
+    yield box
+    srv.shutdown()
+
+
+def test_batch_runs_several_in_parallel(client, ollama_slow):
+    ids = [mk_transcript() for _ in range(3)]
+    t0 = time.time()
+    assert client.post("/api/ai/review-batch", json={"ids": ids, "model": "qwen3:4b", "scope": "all", "parallel": 1}).status_code == 200
+    wait_batch(client, ids, 30)
+    seq = time.time() - t0
+    ids2 = [mk_transcript() for _ in range(3)]
+    t0 = time.time()
+    assert client.post("/api/ai/review-batch", json={"ids": ids2, "model": "qwen3:4b", "scope": "all", "parallel": 3}).status_code == 200
+    st = wait_batch(client, ids2, 30)
+    par = time.time() - t0
+    assert all(i["status"] == "done" for i in st["items"])
+    assert par < seq * 0.7, f"in parallelo {par:.2f}s vs una alla volta {seq:.2f}s"
+
+
+def test_activity_lists_ai_reviews_while_running(client, ollama_slow):
+    ids = [mk_transcript() for _ in range(3)]
+    assert client.post("/api/ai/review-batch", json={"ids": ids, "model": "qwen3:4b", "scope": "all", "parallel": 1}).status_code == 200
+    seen = {}
+    for _ in range(60):
+        for r in client.get("/api/activity").json()["ai_reviews"]:
+            seen.setdefault(r["id"], set()).add(r["status"])
+        if len(seen) == 3 and any("running" in s for s in seen.values()):
+            break
+        time.sleep(0.05)
+    assert set(seen) == set(ids), seen                                            # tutte e tre compaiono nelle Attività
+    row = [r for r in client.get("/api/activity").json()["ai_reviews"] if r["id"] == ids[0]]
+    assert not row or (row[0]["batch"] == ids and row[0]["title"] == "Lezione AI")  # con elenco del gruppo e titolo
+    wait_batch(client, ids, 30)
+    assert client.get("/api/activity").json()["ai_reviews"] == []                  # a fine lavoro spariscono
+
+
+def test_stop_is_immediate_even_with_a_long_request(client, ollama_slow):
+    ollama_slow["delay"] = 6                     # un passaggio "dura" 6 secondi
+    ids = [mk_transcript() for _ in range(2)]
+    assert client.post("/api/ai/review-batch", json={"ids": ids, "model": "qwen3:4b", "scope": "all", "parallel": 2}).status_code == 200
+    time.sleep(0.8)                              # le richieste sono in volo
+    t0 = time.time()
+    assert client.post("/api/ai/review-batch/cancel").json()["was_active"] is True
+    st = wait_batch(client, ids, 10)
+    assert time.time() - t0 < 2.5, f"fermata dopo {time.time() - t0:.1f}s"          # non aspetta i 6 s
+    assert all(i["status"] in ("cancelled", "none") for i in st["items"]) and not st["active"]
+    assert client.get("/api/activity").json()["ai_reviews"] == []
+
+
+def test_single_review_stop_is_immediate(client, ollama_slow):
+    ollama_slow["delay"] = 6
+    tid = mk_transcript()
+    assert client.post(f"/api/transcripts/{tid}/ai-review", json={"model": "qwen3:4b", "scope": "all"}).status_code == 200
+    time.sleep(0.8)
+    t0 = time.time()
+    client.post(f"/api/transcripts/{tid}/ai-review/cancel")
+    for _ in range(40):
+        rv = (client.get(f"/api/transcripts/{tid}").json()["stats"] or {}).get("ai_review") or {}
+        if rv.get("status") in ("cancelled", "done", "error"):
+            break
+        time.sleep(0.1)
+    assert rv["status"] == "cancelled" and time.time() - t0 < 2.5

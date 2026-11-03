@@ -8,11 +8,14 @@ Principi:
    approvate in passato). Non c'è addestramento/fine-tuning: richiederebbe dati e potenza che un PC/iPad non ha;
  - serve solo se la trascrizione lo richiede: l'app stima se è necessaria e può limitarsi ai soli punti dubbi."""
 import difflib
+import http.client
 import json
 import re
+import socket
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from . import config, db, registry, textutil, vocab
@@ -27,6 +30,35 @@ RECOMMENDED = [
      "note": "Velocissimo ma di qualità limitata in italiano: solo per PC molto lenti."},
 ]
 PULL: dict = {}
+REVIEWS: dict = {}       # revisioni in corso o in coda (per il centro Attività): tid -> {owner, title, model, status, done, total, batch}
+_ACTIVE: dict = {}       # tid -> connessione HTTP aperta verso Ollama (per fermare subito la richiesta in corso)
+_ALOCK = threading.Lock()
+
+
+def track(tid, **kw):
+    with _ALOCK:
+        REVIEWS.setdefault(tid, {"done": 0, "total": 0, "failed": 0}).update(kw)
+
+
+def untrack(tid):
+    with _ALOCK:
+        REVIEWS.pop(tid, None)
+
+
+def abort(tid):
+    """Ferma SUBITO la richiesta in corso a Ollama (chiude la connessione: Ollama smette di generare)."""
+    with _ALOCK:
+        c = _ACTIVE.get(tid)
+    if c is not None:
+        try:
+            if c.sock:
+                c.sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        try:
+            c.close()
+        except OSError:
+            pass
 MAX_CHANGE = 0.40          # oltre il 40% di parole cambiate in una riga: proposta scartata
 SCHEMA = {"type": "object", "required": ["lines"], "properties": {"lines": {"type": "array", "items": {
     "type": "object", "required": ["n", "text", "off_topic"], "properties": {
@@ -85,21 +117,40 @@ def pull(model):
 
 
 # ---------------------------------------------------------------- chiamata al modello
-def chat(model, system, user, timeout=900):
+def _post_chat(body, timeout, tid):
+    u = urllib.parse.urlsplit(_url("/api/chat"))
+    Conn = http.client.HTTPSConnection if u.scheme == "https" else http.client.HTTPConnection
+    conn = Conn(u.hostname, u.port or (443 if u.scheme == "https" else 80), timeout=timeout)
+    if tid:
+        with _ALOCK:
+            _ACTIVE[tid] = conn
+    try:
+        conn.request("POST", u.path or "/api/chat", json.dumps(body).encode(), {"Content-Type": "application/json"})
+        r = conn.getresponse()
+        data = r.read()
+        return r.status, data
+    finally:
+        if tid:
+            with _ALOCK:
+                if _ACTIVE.get(tid) is conn:
+                    _ACTIVE.pop(tid, None)
+        try:
+            conn.close()
+        except OSError:
+            pass
+
+
+def chat(model, system, user, timeout=900, tid=None):
     body = {"model": model, "stream": False, "think": False, "format": SCHEMA, "keep_alive": "10m",
             "options": {"temperature": 0, "num_ctx": 8192},
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user + "\n/no_think"}]}
-    try:
-        with _req("/api/chat", body, timeout) as r:
-            out = json.load(r)
-    except urllib.error.HTTPError as e:
-        if e.code == 400:                       # Ollama più vecchio: niente schema JSON, solo "json"
-            body["format"] = "json"
-            with _req("/api/chat", body, timeout) as r:
-                out = json.load(r)
-        else:
-            raise
-    txt = out["message"]["content"]
+    code, data = _post_chat(body, timeout, tid)
+    if code == 400:                              # Ollama più vecchio: niente schema JSON, solo "json"
+        body["format"] = "json"
+        code, data = _post_chat(body, timeout, tid)
+    if code != 200:
+        raise urllib.error.HTTPError(_url("/api/chat"), code, data[:200].decode("utf-8", "ignore"), None, None)
+    txt = json.loads(data)["message"]["content"]
     return re.sub(r"<think>.*?</think>", "", txt, flags=re.S).strip()
 
 
@@ -288,7 +339,9 @@ def review(tid, model, scope, instructions, off_topic, owner, cancelled=lambda: 
         st = (db.get(tid) or {}).get("stats") or {}
         st["ai_review"] = state
         db.update(tid, stats=st)
+        track(tid, status=state["status"], done=state["done"], total=state["total"], failed=state["failed"])
 
+    track(tid, owner=owner, title=t["title"], model=model, status="running", total=len(groups))
     save()
     try:
         for g in groups:
@@ -300,14 +353,20 @@ def review(tid, model, scope, instructions, off_topic, owner, cancelled=lambda: 
             data = None
             for attempt in range(2):
                 try:
-                    raw = chat(model, SYSTEM, build_user(ctx, lines, before))
+                    raw = chat(model, SYSTEM, build_user(ctx, lines, before), tid=tid)
                     data = json.loads(raw)["lines"]
                     if sorted(int(x["n"]) for x in data) == [n for n, _ in lines]:
                         break
                     data = None
                 except Exception as e:
+                    if cancelled():              # fermata dall'utente: la richiesta è stata interrotta di proposito
+                        data = None
+                        break
                     state["last_error"] = f"{type(e).__name__}: {e}"[:200]
                     data = None
+            if cancelled():
+                state["status"] = "cancelled"
+                break
             state["done"] += 1
             if data is None:
                 state["failed"] += 1
@@ -332,6 +391,7 @@ def review(tid, model, scope, instructions, off_topic, owner, cancelled=lambda: 
         state["error"] = f"{type(e).__name__}: {e}"[:300]
     state["finished"] = time.time()
     save()
+    untrack(tid)
 
 
 def apply(tid, accept_edits, accept_off, owner):

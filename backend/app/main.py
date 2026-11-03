@@ -148,7 +148,8 @@ def activity():
     dl = {k: v for k, v in installer._state.items() if v.get("state") in ("starting", "downloading", "extracting")}
     mine = {j["id"] for j in jobs}
     ai = {m: v for m, v in llm.PULL.items() if v.get("state") in ("starting", "downloading")}
-    return {"jobs": jobs, "downloads": dl | {"ai:" + k: v | {"state": "downloading"} for k, v in ai.items()}, "parallel": engine.parallel_limit(),
+    reviews = [{"id": k, **{x: v.get(x) for x in ("title", "model", "status", "done", "total", "failed", "batch")}} for k, v in list(llm.REVIEWS.items()) if v.get("owner") == me()]
+    return {"jobs": jobs, "downloads": dl | {"ai:" + k: v | {"state": "downloading"} for k, v in ai.items()}, "parallel": engine.parallel_limit(), "ai_reviews": reviews,
             "live": [{"id": s.tid, **s.status_msg()} for s in live.sessions.values() if s.tid in mine]}
 
 
@@ -1323,6 +1324,7 @@ class BatchReviewIn(BaseModel):
     scope: str = "flagged"
     instructions: str = ""
     off_topic: bool = True
+    parallel: int = 2          # quante trascrizioni insieme (1-4); il guadagno reale dipende da Ollama (OLLAMA_NUM_PARALLEL) e dalla RAM
 
 
 def _owned_done(tid):
@@ -1365,26 +1367,36 @@ def ai_review_batch(b: BatchReviewIn):
         return {"started": [], "skipped": skipped}
     batch = {"ids": ids, "cancel": False}
     _ai_batches[owner] = batch
+    for tid in ids:
+        llm.track(tid, owner=owner, title=db.get(tid)["title"], model=b.model, status="queued", batch=ids)
+
+    def one(tid):
+        if batch["cancel"]:
+            st = (db.get(tid) or {}).get("stats") or {}
+            if (st.get("ai_review") or {}).get("status") == "queued":
+                st.pop("ai_review", None)
+                db.update(tid, stats=st)
+            llm.untrack(tid)
+            return
+        _ai_cancel[tid] = False
+        try:
+            llm.review(tid, b.model, b.scope, b.instructions, b.off_topic, owner, lambda: batch["cancel"] or _ai_cancel.get(tid, False))
+        except Exception as e:  # un errore su una trascrizione non ferma le altre
+            st = (db.get(tid) or {}).get("stats") or {}
+            st["ai_review"] = {"status": "error", "error": f"{type(e).__name__}: {e}"[:200], "items": []}
+            db.update(tid, stats=st)
+            llm.untrack(tid)
 
     def run():
+        from concurrent.futures import ThreadPoolExecutor
         try:
-            for tid in ids:
-                if batch["cancel"]:
-                    st = (db.get(tid) or {}).get("stats") or {}
-                    if (st.get("ai_review") or {}).get("status") == "queued":
-                        st.pop("ai_review", None)
-                        db.update(tid, stats=st)
-                    continue
-                _ai_cancel[tid] = False
-                try:
-                    llm.review(tid, b.model, b.scope, b.instructions, b.off_topic, owner, lambda tid=tid: batch["cancel"] or _ai_cancel.get(tid, False))
-                except Exception as e:  # un errore su una trascrizione non ferma le altre
-                    st = (db.get(tid) or {}).get("stats") or {}
-                    st["ai_review"] = {"status": "error", "error": f"{type(e).__name__}: {e}"[:200], "items": []}
-                    db.update(tid, stats=st)
+            with ThreadPoolExecutor(max_workers=min(max(b.parallel, 1), 4), thread_name_prefix="ai-batch") as ex:
+                list(ex.map(one, ids))
         finally:
+            for tid in ids:
+                llm.untrack(tid)
             _ai_batches.pop(owner, None)
-    threading.Thread(target=run, daemon=True, name="ai-batch").start()
+    threading.Thread(target=run, daemon=True, name="ai-batch-main").start()
     return {"started": ids, "skipped": skipped}
 
 
@@ -1413,6 +1425,8 @@ def ai_review_batch_cancel():
     b = _ai_batches.get(me())
     if b:
         b["cancel"] = True
+        for tid in b["ids"]:
+            llm.abort(tid)                       # interrompe subito la richiesta in corso (niente attesa della fine del passaggio)
     return {"ok": True, "was_active": bool(b)}
 
 
@@ -1444,6 +1458,7 @@ def ai_apply_batch(b: BatchApplyIn):
 def ai_review_cancel(tid: str):
     _t(tid)
     _ai_cancel[tid] = True
+    llm.abort(tid)
     return {"ok": True}
 
 

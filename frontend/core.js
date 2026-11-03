@@ -176,12 +176,15 @@ document.addEventListener("visibilitychange", () => { if (document.visibilitySta
 
 /* ---------- centro attività (come il gestore dei download) ---------- */
 const UP = { items: [], listeners: new Set() };        // caricamenti in corso (stato lato client)
-const ACT = { jobs: [], downloads: {}, live: [], seen: new Map(), open: false };
+const ACT = { jobs: [], downloads: {}, live: [], ai: [], aiSeen: new Map(), seen: new Map(), open: false };
 const notifyUI = () => { UP.listeners.forEach(f => f()); renderActivity(); };
 
 async function pollActivity() {
   try {
-    const a = await api("/api/activity"); ACT.downloads = a.downloads; ACT.live = a.live; ACT.parallel = a.parallel;
+    const a = await api("/api/activity"); ACT.downloads = a.downloads; ACT.live = a.live; ACT.parallel = a.parallel; ACT.ai = a.ai_reviews || [];
+    const aiNow = new Map(ACT.ai.map(r => [r.id, r]));          // una correzione AI è sparita dall'elenco = finita: avvisa
+    for (const [id, r] of ACT.aiSeen) if (!aiNow.has(id) && r.status === "running") toast("✨ Correzione AI completata: " + r.title, 5000);
+    ACT.aiSeen = aiNow;
     const now = new Map(a.jobs.map(j => [j.id, j]));
     for (const [id] of ACT.seen) {            // lavori spariti dall'elenco attivo = finiti: avvisa
       if (!now.has(id)) {
@@ -202,7 +205,7 @@ async function pollActivity() {
   } catch {}
   renderActivity();
 }
-function activityCount() { return UP.items.filter(u => u.state !== "done" && u.state !== "error").length + ACT.jobs.filter(j => j.status !== "recording").length + Object.keys(ACT.downloads).length; }
+function activityCount() { return UP.items.filter(u => u.state !== "done" && u.state !== "error").length + ACT.jobs.filter(j => j.status !== "recording").length + Object.keys(ACT.downloads).length + ACT.ai.length; }
 /* Tocchi: se un dito è appoggiato, i ridisegni periodici aspettano (altrimenti il pulsante viene sostituito e il tocco va perso) */
 let _pressAt = 0;
 ["pointerdown", "touchstart", "mousedown"].forEach(ev => addEventListener(ev, () => { _pressAt = Date.now(); }, true));
@@ -223,6 +226,10 @@ function activityRows() {
     pct: j.status === "running" ? (j.chunks_total ? 100 * j.chunks_done / j.chunks_total : 0) : null,
     sub: j.status === "running" ? ((j.stats || {}).phase || "Trascrizione") + (j.chunks_total ? ` · ${j.chunks_done}/${j.chunks_total}` : "") : "In coda",
     actions: [{ label: "✕", fn: () => api(`/api/transcripts/${j.id}/cancel`, { method: "POST" }) }] }));
+  ACT.ai.forEach(r => { const batch = r.batch && r.batch.length > 1; rows.push({ key: "ai:" + r.id, icon: "✨", title: "Correzione AI · " + r.title, state: r.status, pct: r.status === "running" ? (r.total ? 100 * r.done / r.total : 0) : null,
+    sub: r.status === "running" ? `Passaggio ${r.done}/${r.total || "…"}` + (r.failed ? ` · ${r.failed} falliti` : "") : "In coda",
+    actions: [{ label: batch ? "Apri" : "Vedi", fn: () => { ACT.open = false; actStruct = ""; renderActivity(); if (batch) aiBatchDialog(r.batch); else location.hash = "#/t/" + r.id; } },
+      { label: "✕", fn: () => api(batch ? "/api/ai/review-batch/cancel" : `/api/transcripts/${r.id}/ai-review/cancel`, { method: "POST" }).then(() => toast("Correzione AI fermata")).catch(e => showErr(e.message)) }] }); });
   Object.entries(ACT.downloads).forEach(([id, d]) => rows.push({ key: "dl:" + id, icon: "⬇", title: "Download " + mname(id.replace(/^ai:/, "")), state: d.state, pct: d.total ? 100 * (d.downloaded ?? d.completed ?? 0) / d.total : 0,
     sub: d.state === "extracting" ? "Estrazione…" : `${fmtB(d.downloaded ?? d.completed ?? 0)} / ${fmtB(d.total || 0)}`, actions: [] }));
   return rows;

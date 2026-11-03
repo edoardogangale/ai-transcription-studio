@@ -2,7 +2,7 @@
 
 App web installabile: la trascrizione (Whisper) gira **dentro Safari sull'iPad**. Nessun server, nessun account, nessun dato inviato: audio e testi restano nell'archivio del browser di quell'iPad. Ogni amico che apre il link ha il **proprio** archivio, separato dal tuo.
 
-**Non provata su Safari/iPad reali**: collaudata solo con un modello finto in Chromium (interfaccia, VAD, salvataggio, elimina; quaderno con mouse e tocchi simulati: `tests/e2e/e2e_ink.mjs`, 47 controlli). Il caricamento del modello vero va verificato sull'iPad.
+**Non provata su Safari/iPad reali**: collaudata solo con un modello finto in Chromium (interfaccia, VAD, salvataggio, elimina; quaderno con mouse e tocchi simulati: `tests/e2e/e2e_ink.mjs`, 47 controlli; la registrazione e il caricamento: `e2e_ondevice.mjs`, 20 controlli). Il caricamento del modello vero va verificato sull'iPad.
 
 ## Pubblicazione (una volta sola, GitHub Pages gratuito)
 1. GitHub → repository → **Settings → Pages → Source: GitHub Actions**. (Con l'account gratuito il repository deve essere **pubblico**: il codice è visibile, i dati degli utenti no.)
@@ -56,6 +56,9 @@ Causa probabile: per Turbo l'app chiedeva il codificatore a precisione piena (mo
 
 ## Carica un audio
 Due pulsanti: **Scegli audio** (elenco esteso di formati) e **Tutti i file** (nessun filtro: serve se il selettore di iPadOS non mostra il tuo audio). Si possono scegliere **più file insieme** o trascinarli (Split View con l'app File). I file lunghi vengono tagliati nei punti di silenzio (non a metà parola). Se Safari non riesce a leggere il formato (tipico: **.opus di WhatsApp**, .amr, .wma) l'app lo dice e suggerisce di convertirlo in .m4a/.mp3/.wav o di usare l'app server.
+
+## «Mi toglie i file» (coda persistente)
+I file scelti in *Carica audio* vengono copiati subito nell'archivio dell'app e restano in **coda** finché non sono trascritti: se la pagina si ricarica (anche per un aggiornamento) o Safari la chiude, al ritorno li ritrovi con «Riprendi». Gli aggiornamenti automatici non ricaricano più la pagina durante un caricamento, una registrazione o un download: compare «Nuova versione pronta: tocca qui per aggiornare».
 
 ## Limiti
 - Modelli più piccoli di quelli del server: qualità più bassa, soprattutto in italiano. Niente riconoscimento dei parlanti né correzione AI.

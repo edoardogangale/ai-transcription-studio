@@ -17,11 +17,14 @@ const fmt = s => { s = Math.max(0, Math.round(s)); const m = Math.floor(s / 60);
 
 // ---------- archivio (IndexedDB) ----------
 let _db;
-function db() { return _db ||= new Promise((res, rej) => { const r = indexedDB.open("od-studio", 2); r.onupgradeneeded = () => { const d = r.result; if (!d.objectStoreNames.contains("notes")) d.createObjectStore("notes", { keyPath: "id" }); if (!d.objectStoreNames.contains("audio")) d.createObjectStore("audio"); if (!d.objectStoreNames.contains("pages")) d.createObjectStore("pages", { keyPath: "id" }); }; r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
+function db() { return _db ||= new Promise((res, rej) => { const r = indexedDB.open("od-studio", 3); r.onupgradeneeded = () => { const d = r.result; if (!d.objectStoreNames.contains("notes")) d.createObjectStore("notes", { keyPath: "id" }); if (!d.objectStoreNames.contains("audio")) d.createObjectStore("audio"); if (!d.objectStoreNames.contains("pages")) d.createObjectStore("pages", { keyPath: "id" }); if (!d.objectStoreNames.contains("queue")) d.createObjectStore("queue", { keyPath: "id" }); }; r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
 async function tx(store, mode, fn) { const d = await db(); return new Promise((res, rej) => { const t = d.transaction(store, mode); const out = fn(t.objectStore(store)); t.oncomplete = () => res(out && out.result !== undefined ? out.result : out); t.onerror = () => rej(t.error); }); }
 const putNote = n => tx("notes", "readwrite", s => s.put(n));
 const getNote = id => tx("notes", "readonly", s => s.get(id));
 const allNotes = async () => (await tx("notes", "readonly", s => s.getAll())).sort((a, b) => b.created - a.created);
+const qPut = x => tx("queue", "readwrite", s => s.put(x));
+const qAll = async () => (await tx("queue", "readonly", s => s.getAll())).sort((a, b) => a.created - b.created);
+const qDel = id => tx("queue", "readwrite", s => s.delete(id));
 const putAudio = (id, i, blob) => tx("audio", "readwrite", s => s.put(blob, `${id}:${String(i).padStart(6, "0")}`));
 async function getAudio(id) { const d = await db(); return new Promise((res, rej) => { const out = []; const r = d.transaction("audio").objectStore("audio").openCursor(IDBKeyRange.bound(id + ":", id + ":~")); r.onsuccess = () => { const c = r.result; if (c) { out.push(c.value); c.continue(); } else res(out); }; r.onerror = () => rej(r.error); }); }
 async function delNote(id) { await tx("notes", "readwrite", s => s.delete(id)); await tx("audio", "readwrite", s => s.delete(IDBKeyRange.bound(id + ":", id + ":~"))); }
@@ -287,34 +290,56 @@ function splitSpeech(pcm, maxS = 28, searchS = 4) { // finestre da ~28 s tagliat
 }
 async function importView() {
   const model = cfg.get("model", "onnx-community/whisper-small"), lang = cfg.get("lang", "italian");
-  const box = h("div"), list = h("div", { class: "group" }); let busy = false, firstId = null, okCount = 0;
-  const addRow = f => { const s = h("span", { class: "mut" }, "In attesa"); const row = h("div", { class: "cell" }, h("div", { class: "grow" }, h("div", { class: "t" }, f.name), h("div", { class: "m" }, `${(f.size / 1e6).toFixed(1)} MB`)), s); list.append(row); return s; };
+  const box = h("div"), list = h("div", { class: "group" }), banner = h("div", { class: "notice" }), done = h("div"); let busy = false; const prog = new Map();
   const friendly = e => /decode|encoding|EncodingError|unable/i.test((e.name || "") + " " + (e.message || "")) ? "Safari non legge questo formato (es. .opus di WhatsApp, .amr, .wma). Convertilo in .m4a, .mp3 o .wav, oppure caricalo nell'app server (legge tutti i formati)." : (e.message || String(e));
-  async function run(files) {
-    files = [...files]; if (!files.length || busy) return; busy = true; pick.disabled = pickAll.disabled = true; okCount = 0; firstId = null; list.replaceChildren();
-    const stats = files.map(addRow);
-    try { loadUI(box); await Engine.load(model); box.replaceChildren(h("div", { class: "ok" }, "Modello pronto.")); }
-    catch (e) { box.replaceChildren(h("div", { class: "bad" }, "Modello non caricato: " + e.message)); busy = false; pick.disabled = pickAll.disabled = false; return; }
-    for (const [i, f] of files.entries()) {
-      const st = stats[i]; st.className = "mut"; st.textContent = "Leggo il file…";
-      try {
-        const pcm = await decodeToPcm(f), id = "n" + Date.now() + i, parts = splitSpeech(pcm);
-        const note = { id, title: f.name.replace(/\.[^.]+$/, ""), created: Date.now(), duration: pcm.length / 16000, model, lang, status: "recording", segments: [], mime: f.type || "audio/mp4" };
-        await putNote(note); await putAudio(id, 0, f);
-        for (const [k, [a, b]] of parts.entries()) { st.textContent = `Trascrivo… ${Math.round(100 * k / parts.length)}%`; const r = await Engine.run(pcm.slice(a, b), lang); if (r.text) { note.segments.push({ start: a / 16000, dur: (b - a) / 16000, text: r.text }); await putNote(note); } }
-        note.status = "done"; await putNote(note); st.className = "ok"; st.textContent = "✓ Fatto"; okCount++; firstId ||= id;
-      } catch (e) { st.className = "bad"; st.textContent = "✕ " + friendly(e); }
-    }
-    busy = false; pick.disabled = pickAll.disabled = false;
-    if (okCount === 1 && files.length === 1) go("#/note/" + firstId); else if (okCount) { toast(`${okCount} ${okCount === 1 ? "audio trascritto" : "audio trascritti"}`); box.append(h("button", { class: "primary", style: "margin-top:8px", onclick: () => go("#/recs") }, "Vai alle registrazioni")); }
+  async function paint() { // la coda è sempre letta dall'archivio del dispositivo: se la pagina si ricarica, i file sono ancora lì
+    const q = await qAll(), pending = q.filter(i => i.state !== "error");
+    list.replaceChildren(...q.map(it => h("div", { class: "cell" }, h("div", { class: "grow" }, h("div", { class: "t" }, it.name), h("div", { class: "m" }, `${(it.size / 1e6).toFixed(1)} MB`)),
+      h("span", { class: it.state === "error" ? "bad" : "mut", style: "max-width:55%" }, prog.get(it.id) || (it.state === "error" ? "✕ " + it.error : "In coda · salvato su questo iPad")),
+      !busy ? h("button", { class: "plain", "aria-label": "Rimuovi dalla coda", onclick: async () => { await qDel(it.id); paint(); } }, "Rimuovi") : null)));
+    list.hidden = !q.length; banner.hidden = busy || !pending.length;
+    banner.replaceChildren(`${pending.length} ${pending.length === 1 ? "file in coda" : "file in coda"}: non sono andati persi. `, h("button", { class: "primary", onclick: () => processQueue() }, "Riprendi"));
   }
-  const mk = accept => h("input", { type: "file", multiple: "", ...(accept ? { accept } : {}), style: "display:none", onchange: e => { const fl = [...e.target.files]; e.target.value = ""; run(fl); } });
+  async function addFiles(files) { // copia SUBITO i file nell'archivio dell'app (non dipendono più dal selettore né dalla pagina), poi li trascrive
+    files = [...files]; if (!files.length) return;
+    for (const f of files) {
+      try { const blob = new Blob([await f.arrayBuffer()], { type: f.type || "audio/mp4" }); await qPut({ id: "q" + Date.now() + Math.random().toString(36).slice(2, 6), name: f.name, size: f.size, type: f.type, blob, state: "pending", created: Date.now() }); }
+      catch (e) { toast("Impossibile leggere «" + f.name + "»: " + (e.message || e)); }
+    }
+    await paint(); processQueue();
+  }
+  async function processQueue() {
+    if (busy) return; const q = (await qAll()).filter(i => i.state !== "error"); if (!q.length) return;
+    busy = true; workBusy++; pick.disabled = pickAll.disabled = true; done.replaceChildren(); await paint();
+    let ok = 0, firstId = null;
+    try {
+      try { loadUI(box); await Engine.load(model); box.replaceChildren(h("div", { class: "ok" }, "Modello pronto.")); }
+      catch (e) { box.replaceChildren(h("div", { class: "bad" }, "Modello non caricato: " + e.message + " — i file restano in coda.")); return; }
+      for (const it of q) {
+        try {
+          prog.set(it.id, "Leggo il file…"); paint();
+          const pcm = await decodeToPcm(it.blob), id = "n" + Date.now() + ok, parts = splitSpeech(pcm);
+          const note = { id, title: it.name.replace(/\.[^.]+$/, ""), created: Date.now(), duration: pcm.length / 16000, model, lang, status: "recording", segments: [], mime: it.type || "audio/mp4" };
+          await putNote(note); await putAudio(id, 0, it.blob);
+          for (const [k, [a, b]] of parts.entries()) { prog.set(it.id, `Trascrivo… ${Math.round(100 * k / parts.length)}%`); paint(); const r = await Engine.run(pcm.slice(a, b), lang); if (r.text) { note.segments.push({ start: a / 16000, dur: (b - a) / 16000, text: r.text }); await putNote(note); } }
+          note.status = "done"; await putNote(note); await qDel(it.id); ok++; firstId ||= id;
+        } catch (e) { await qPut({ ...it, state: "error", error: friendly(e) }); }
+        prog.delete(it.id);
+      }
+    } finally {
+      busy = false; workBusy--; pick.disabled = pickAll.disabled = false; await paint();
+      if (ok === 1 && q.length === 1) go("#/note/" + firstId);
+      else if (ok) { toast(`${ok} ${ok === 1 ? "audio trascritto" : "audio trascritti"}`); done.replaceChildren(h("button", { class: "primary", onclick: () => go("#/recs") }, "Vai alle registrazioni")); }
+    }
+  }
+  const mk = accept => h("input", { type: "file", multiple: "", ...(accept ? { accept } : {}), style: "display:none", onchange: e => { const fl = [...e.target.files]; e.target.value = ""; addFiles(fl); } });
   const inp = mk(AUDIO_ACCEPT), inpAll = mk("");
   const pick = h("button", { class: "primary", onclick: () => inp.click() }, "Scegli audio"), pickAll = h("button", { onclick: () => inpAll.click() }, "Tutti i file (se non vedi il tuo audio)");
-  const drop = h("div", { class: "card" }, h("div", { class: "row" }, pick, pickAll), h("div", { class: "mut", style: "margin-top:8px" }, "Puoi scegliere più file insieme o trascinarli qui (da Split View con l'app File)."));
-  drop.addEventListener("dragover", e => { e.preventDefault(); }); drop.addEventListener("drop", e => { e.preventDefault(); run(e.dataTransfer.files); });
-  app.append(h("h1", null, "Carica un audio"), h("div", { class: "sub" }, "Es. le registrazioni mandate da un amico (.m4a, .mp3, .wav…). Il file viene letto in memoria: per lezioni molto lunghe (oltre ~1 ora) conviene registrare dal vivo."),
-    h("div", { class: "row" }, modelSel(), langSel()), drop, box, list, inp, inpAll);
+  const drop = h("div", { class: "card" }, h("div", { class: "row" }, pick, pickAll), h("div", { class: "mut", style: "margin-top:8px" }, "Puoi scegliere più file insieme o trascinarli qui (da Split View con l'app File). I file scelti vengono copiati nell'app: restano in coda anche se la pagina si ricarica."));
+  drop.addEventListener("dragover", e => { e.preventDefault(); }); drop.addEventListener("drop", e => { e.preventDefault(); addFiles(e.dataTransfer.files); });
+  app.append(h("h1", null, "Carica un audio"), h("div", { class: "sub" }, "Es. le registrazioni mandate da un amico (.m4a, .mp3, .wav…). Per lezioni molto lunghe (oltre ~1 ora) conviene registrare dal vivo."),
+    h("div", { class: "row" }, modelSel(), langSel()), drop, banner, box, list, done, inp, inpAll);
+  await paint();
 }
 
 async function detail(id) {
@@ -377,15 +402,19 @@ async function settings() {
 }
 
 document.head.append(h("style", null, INK_CSS));
-let recBusy = false;   // c'è una registrazione in corso: niente ricarica automatica
+let recBusy = false, workBusy = 0;   // c'è una registrazione in corso: niente ricarica automatica
 if ("serviceWorker" in navigator) {
   const had = !!navigator.serviceWorker.controller; let reloaded = false;
   navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then(reg => {
     const chk = () => reg.update().catch(() => {}); setInterval(chk, 20 * 60e3); document.addEventListener("visibilitychange", () => { if (!document.hidden) chk(); });
   }).catch(() => {});
-  navigator.serviceWorker.addEventListener("controllerchange", () => {   // è arrivata una versione nuova: ricarica (a meno che si stia registrando)
-    if (!had || reloaded) return; if (recBusy) { toast("Aggiornamento pronto: si applica alla prossima apertura"); return; } reloaded = true; location.reload();
-  });
+  const onController = force => {   // è arrivata una versione nuova: ricarica SOLO se sei in una schermata "ferma" (mai durante caricamenti, registrazioni, download)
+    if (!had && !force) return; if (reloaded) return;
+    const calm = ["", "#/", "#/recs"].includes(location.hash) && !recBusy && !workBusy;
+    if (calm) { reloaded = true; location.reload(); return; }
+    if (!document.getElementById("updbanner")) document.body.append(h("div", { id: "updbanner", class: "apptoast", style: "bottom:90px;cursor:pointer;pointer-events:auto", onclick: () => location.reload() }, "Nuova versione pronta: tocca qui per aggiornare (quando hai finito)"));
+  };
+  window.__ats_onController = onController; navigator.serviceWorker.addEventListener("controllerchange", () => onController());
 }
 // recupero: registrazioni rimaste "in corso" dopo una chiusura improvvisa
 (async () => { for (const n of await allNotes()) if (n.status === "recording" && Date.now() - n.created > 60000 && !(location.hash || "").includes(n.id)) { n.status = "interrupted"; await putNote(n); } route(); })();
